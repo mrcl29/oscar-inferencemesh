@@ -6,6 +6,7 @@ resilient apiserver readiness polling, and internal DNS resolution.
 
 import sys
 
+
 def patch_kind_deploy(filepath: str) -> None:
     with open(filepath, "r") as f:
         content = f.read()
@@ -52,6 +53,7 @@ def patch_kind_deploy(filepath: str) -> None:
 
     with open(filepath, "w") as f:
         f.write(content)
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

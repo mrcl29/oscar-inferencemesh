@@ -7,6 +7,7 @@ and output shell-compatible variable assignments for dynamic orchestration.
 import sys
 import yaml
 
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: parse_model_manifest.py <path_to_model_yaml>", file=sys.stderr)
@@ -40,13 +41,17 @@ def main():
                 if "env" in ks and "VLLM_CPU_KVCACHE_SPACE" in ks["env"]:
                     kv_space = str(ks["env"]["VLLM_CPU_KVCACHE_SPACE"])
     except Exception as e:
-        print(f"# Warning: Failed to parse {filepath}: {e}. Falling back to default values.", file=sys.stderr)
+        print(
+            f"# Warning: Failed to parse {filepath}: {e}. Falling back to default values.",
+            file=sys.stderr,
+        )
 
     print(f'PARSED_MODEL_NAME="{name}"')
     print(f'PARSED_STORAGE_URI="{uri}"')
     print(f'PARSED_RUNTIME_IMAGE="{runtime}"')
     print(f'PARSED_MAX_MODEL_LEN="{max_len}"')
     print(f'PARSED_KVCACHE_SPACE="{kv_space}"')
+
 
 if __name__ == "__main__":
     main()

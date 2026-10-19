@@ -4,8 +4,8 @@ This directory contains decoupled Kubernetes manifests for deploying scalable, i
 
 ## Files
 
-| File | Type | Description |
-| :--- | :--- | :--- |
+| File                                                                                                                              | Type                         | Description                                                                                                                                                                                                                                                                                                             |
+| :-------------------------------------------------------------------------------------------------------------------------------- | :--------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`llminferenceservice.yaml`](file:///home/marc/Projects/oscar-inferencemesh/examples/inference-services/llminferenceservice.yaml) | Kubernetes Manifest Template | Generic, decoupled template for a KServe `LLMInferenceService`. Uses the base preset `kserve-config-llm-scheduler` to inject the `llm-d` Endpoint Picker (EPP) router and provision the Gateway API `InferencePool`. Configures a pool of vLLM worker containers on CPU with customizable resource requests and limits. |
 
 ## Usage

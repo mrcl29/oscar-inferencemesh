@@ -8,9 +8,9 @@ metadata:
     app.kubernetes.io/part-of: oscar-inferencemesh
 spec:
   endpoints:
-  - fqdn:
-      hostname: ${TARGET_BACKEND_HOST}
-      port: ${TARGET_BACKEND_PORT}
+    - fqdn:
+        hostname: ${TARGET_BACKEND_HOST}
+        port: ${TARGET_BACKEND_PORT}
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: AIServiceBackend
@@ -38,16 +38,16 @@ metadata:
     app.kubernetes.io/part-of: oscar-inferencemesh
 spec:
   parentRefs:
-  - name: ${GATEWAY_NAME}
-    namespace: ${GATEWAY_NAMESPACE}
-    kind: Gateway
-    group: gateway.networking.k8s.io
+    - name: ${GATEWAY_NAME}
+      namespace: ${GATEWAY_NAMESPACE}
+      kind: Gateway
+      group: gateway.networking.k8s.io
   rules:
-  - name: ${ROUTE_RULE_NAME}
-    matches:
-    - headers:
-      - name: x-ai-eg-model
-        value: ${MODEL_NAME}
-    backendRefs:
-    - name: ${AI_SERVICE_BACKEND_NAME}
-      weight: 1
+    - name: ${ROUTE_RULE_NAME}
+      matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: ${MODEL_NAME}
+      backendRefs:
+        - name: ${AI_SERVICE_BACKEND_NAME}
+          weight: 1

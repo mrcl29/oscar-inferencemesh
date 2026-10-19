@@ -4,10 +4,10 @@ This directory contains declarative manifests for configuring the ingress networ
 
 ## Files
 
-| File | Type | Description |
-| :--- | :--- | :--- |
-| [`envoy-ai-gateway.yaml`](file:///home/marc/Projects/oscar-inferencemesh/examples/gateways/envoy-ai-gateway.yaml) | Kubernetes Manifest | Deploys the Envoy Gateway infrastructure (`GatewayClass` `eg` and `Gateway`). It defines the public-facing entry point (HTTP listener on port `${GATEWAY_PORT}`, defaulting to `8080`) and permits routes from all namespaces. |
-| [`aigateway-route.yaml`](file:///home/marc/Projects/oscar-inferencemesh/examples/gateways/aigateway-route.yaml) | Kubernetes Manifest | Configures semantic AI routing rules (`AIGatewayRoute`, `AIServiceBackend`, and `Backend`). Matches OpenAI-compatible requests by header (`x-ai-eg-model`) or model payload and dynamically forwards traffic to the target inference service FQDN. |
+| File                                                                                                              | Type                | Description                                                                                                                                                                                                                                        |
+| :---------------------------------------------------------------------------------------------------------------- | :------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`envoy-ai-gateway.yaml`](file:///home/marc/Projects/oscar-inferencemesh/examples/gateways/envoy-ai-gateway.yaml) | Kubernetes Manifest | Deploys the Envoy Gateway infrastructure (`GatewayClass` `eg` and `Gateway`). It defines the public-facing entry point (HTTP listener on port `${GATEWAY_PORT}`, defaulting to `8080`) and permits routes from all namespaces.                     |
+| [`aigateway-route.yaml`](file:///home/marc/Projects/oscar-inferencemesh/examples/gateways/aigateway-route.yaml)   | Kubernetes Manifest | Configures semantic AI routing rules (`AIGatewayRoute`, `AIServiceBackend`, and `Backend`). Matches OpenAI-compatible requests by header (`x-ai-eg-model`) or model payload and dynamically forwards traffic to the target inference service FQDN. |
 
 ## Usage
 

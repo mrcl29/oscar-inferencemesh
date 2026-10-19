@@ -9,7 +9,7 @@ metadata:
 spec:
   # Base reference preset for llm-d: provisions the Endpoint Picker (EPP) router and Gateway API InferencePool
   baseRefs:
-  - name: kserve-config-llm-scheduler
+    - name: kserve-config-llm-scheduler
 
   # Target model specification
   model:
@@ -24,37 +24,37 @@ spec:
     scheduler:
       template:
         containers:
-        - name: main
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              cpu: "1"
-              memory: 1Gi
+          - name: main
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: "1"
+                memory: 1Gi
 
   # vLLM worker container configuration
   template:
     containers:
-    - name: main
-      image: ${RUNTIME_IMAGE}
-      env:
-      - name: VLLM_CPU_KVCACHE_SPACE
-        value: "${VLLM_CPU_KVCACHE_SPACE}"
-      args:
-      - --dtype=auto
-      - --enforce-eager
-      - --max-model-len=${MAX_MODEL_LEN}
-      ports:
-      - containerPort: 8000
-        name: http
-        protocol: TCP
-      resources:
-        limits:
-          cpu: "${WORKER_CPU_LIMIT}"
-          memory: "${WORKER_MEMORY_LIMIT}"
-        requests:
-          cpu: "${WORKER_CPU_REQUEST}"
-          memory: "${WORKER_MEMORY_REQUEST}"
-      securityContext:
-        runAsNonRoot: false
+      - name: main
+        image: ${RUNTIME_IMAGE}
+        env:
+          - name: VLLM_CPU_KVCACHE_SPACE
+            value: "${VLLM_CPU_KVCACHE_SPACE}"
+        args:
+          - --dtype=auto
+          - --enforce-eager
+          - --max-model-len=${MAX_MODEL_LEN}
+        ports:
+          - containerPort: 8000
+            name: http
+            protocol: TCP
+        resources:
+          limits:
+            cpu: "${WORKER_CPU_LIMIT}"
+            memory: "${WORKER_MEMORY_LIMIT}"
+          requests:
+            cpu: "${WORKER_CPU_REQUEST}"
+            memory: "${WORKER_MEMORY_REQUEST}"
+        securityContext:
+          runAsNonRoot: false

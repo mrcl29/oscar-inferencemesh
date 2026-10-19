@@ -1,19 +1,19 @@
 functions:
   oscar:
-  - local:
-      name: qwen2-5-05b-instruct
-      script: script.sh
-      kserve:
-        type: llm_inference
-        llm_inference:
-          runtime_image: ghcr.io/grycap/kserve-vllm-openai-cpu:v0.22.1
-        storage_uri: "oci://ghcr.io/grycap/kserve-qwen2-5-05b-instruct:latest"
-        cpu: '1.0'
-        memory: 3.5Gi
-        args:
-          - --dtype=auto
-          - --enforce-eager
-          - --max-model-len=2048
-        env:
-          VLLM_CPU_KVCACHE_SPACE: "1"
-      log_level: CRITICAL
+    - local:
+        name: qwen2-5-05b-instruct
+        script: script.sh
+        kserve:
+          type: llm_inference
+          llm_inference:
+            runtime_image: ghcr.io/grycap/kserve-vllm-openai-cpu:v0.22.1
+          storage_uri: "oci://ghcr.io/grycap/kserve-qwen2-5-05b-instruct:latest"
+          cpu: "1.0"
+          memory: 3.5Gi
+          args:
+            - --dtype=auto
+            - --enforce-eager
+            - --max-model-len=2048
+          env:
+            VLLM_CPU_KVCACHE_SPACE: "1"
+        log_level: CRITICAL

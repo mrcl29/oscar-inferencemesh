@@ -4,10 +4,10 @@ This directory contains OSCAR Function Definition Language (FDL) manifests repre
 
 ## Files
 
-| File | Type | Description |
-| :--- | :--- | :--- |
-| [`qwen.yml`](file:///home/marc/Projects/oscar-inferencemesh/examples/inference-models/qwen.yml) | OSCAR FDL Manifest | Declares the serverless function `qwen2-5-05b-instruct` using KServe's `llm_inference` runtime. Specifies the runtime image (`ghcr.io/grycap/kserve-vllm-openai-cpu:v0.22.1`), the model weights storage URI (`oci://ghcr.io/grycap/kserve-qwen2-5-05b-instruct:latest`), `--max-model-len=2048`, and memory/CPU limits. |
-| [`script.sh`](file:///home/marc/Projects/oscar-inferencemesh/examples/inference-models/script.sh) | Shell Script | Default dummy script referenced by the OSCAR FDL `script: script.sh` entry. |
+| File                                                                                              | Type               | Description                                                                                                                                                                                                                                                                                                              |
+| :------------------------------------------------------------------------------------------------ | :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`qwen.yml`](file:///home/marc/Projects/oscar-inferencemesh/examples/inference-models/qwen.yml)   | OSCAR FDL Manifest | Declares the serverless function `qwen2-5-05b-instruct` using KServe's `llm_inference` runtime. Specifies the runtime image (`ghcr.io/grycap/kserve-vllm-openai-cpu:v0.22.1`), the model weights storage URI (`oci://ghcr.io/grycap/kserve-qwen2-5-05b-instruct:latest`), `--max-model-len=2048`, and memory/CPU limits. |
+| [`script.sh`](file:///home/marc/Projects/oscar-inferencemesh/examples/inference-models/script.sh) | Shell Script       | Default dummy script referenced by the OSCAR FDL `script: script.sh` entry.                                                                                                                                                                                                                                              |
 
 ## Usage
 

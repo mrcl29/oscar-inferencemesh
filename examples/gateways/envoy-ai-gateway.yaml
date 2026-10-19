@@ -16,9 +16,9 @@ metadata:
 spec:
   gatewayClassName: eg
   listeners:
-  - name: http
-    port: ${GATEWAY_PORT}
-    protocol: HTTP
-    allowedRoutes:
-      namespaces:
-        from: All
+    - name: http
+      port: ${GATEWAY_PORT}
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All

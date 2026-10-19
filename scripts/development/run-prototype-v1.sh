@@ -14,7 +14,7 @@ POSITIONAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --clean|-c)
+        --clean | -c)
             CLEAN_MODE=true
             shift
             ;;
@@ -23,7 +23,7 @@ while [[ $# -gt 0 ]]; do
             CLEAN_GATEWAY=true
             shift
             ;;
-        --help|-h)
+        --help | -h)
             echo "Usage: $0 [OPTIONS] [MODEL_YAML] [SERVICE_YAML] [GATEWAY_YAML] [ROUTE_YAML]"
             echo ""
             echo "Options:"
@@ -66,11 +66,11 @@ for f in "$MODEL_YAML" "$SERVICE_YAML" "$GATEWAY_YAML" "$ROUTE_YAML"; do
 done
 
 # Check required CLI tools
-if ! command -v envsubst &>/dev/null; then
+if ! command -v envsubst &> /dev/null; then
     log_err "envsubst not found. Please install gettext-base / gettext."
     exit 1
 fi
-if ! command -v kubectl &>/dev/null; then
+if ! command -v kubectl &> /dev/null; then
     log_err "kubectl not found in PATH."
     exit 1
 fi
@@ -131,9 +131,9 @@ if [ "$CLEAN_MODE" = true ]; then
     kubectl delete llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" --ignore-not-found=true
 
     # 3. Unregister from OSCAR service catalog
-    if command -v oscar-cli &>/dev/null; then
+    if command -v oscar-cli &> /dev/null; then
         log_info "3. Removing service '$MODEL_NAME' from OSCAR..."
-        oscar-cli service remove "$MODEL_NAME" 2>/dev/null || true
+        oscar-cli service remove "$MODEL_NAME" 2> /dev/null || true
     fi
 
     # 4. Optional: Clean Gateway infrastructure if requested with --clean-all
@@ -157,8 +157,8 @@ envsubst < "$GATEWAY_YAML" | kubectl apply -f -
 
 # 4. Deploy Model via OSCAR CLI (Independent Model layer)
 log_step "3. Registering model in OSCAR"
-if command -v oscar-cli &>/dev/null; then
-    if oscar-cli service list 2>/dev/null | grep -q "$MODEL_NAME"; then
+if command -v oscar-cli &> /dev/null; then
+    if oscar-cli service list 2> /dev/null | grep -q "$MODEL_NAME"; then
         log_info "OSCAR service '$MODEL_NAME' already registered."
     else
         log_info "Registering '$MODEL_NAME' with oscar-cli..."
@@ -179,13 +179,13 @@ envsubst < "$ROUTE_YAML" | kubectl apply -f -
 # 7. Wait for Router Scheduler (EPP) and vLLM Worker Pool Readiness
 log_step "6. Waiting for llm-d Router Scheduler and vLLM workers readiness"
 log_info "Waiting for router scheduler rollout..."
-while ! kubectl -n "$NAMESPACE" get deployment "${SERVICE_NAME}-kserve-router-scheduler" &>/dev/null; do
+while ! kubectl -n "$NAMESPACE" get deployment "${SERVICE_NAME}-kserve-router-scheduler" &> /dev/null; do
     sleep 2
 done
 kubectl -n "$NAMESPACE" rollout status "deployment/${SERVICE_NAME}-kserve-router-scheduler" --timeout=120s
 
 log_info "Waiting for vLLM inference worker pool rollout..."
-while ! kubectl -n "$NAMESPACE" get deployment "${SERVICE_NAME}-kserve" &>/dev/null; do
+while ! kubectl -n "$NAMESPACE" get deployment "${SERVICE_NAME}-kserve" &> /dev/null; do
     sleep 2
 done
 kubectl -n "$NAMESPACE" rollout status "deployment/${SERVICE_NAME}-kserve" --timeout=600s
@@ -196,10 +196,10 @@ kubectl -n "$NAMESPACE" get aigatewayroute "$ROUTE_NAME" || true
 
 # 8. Detect Envoy AI Gateway Endpoint
 log_step "7. Resolving Envoy AI Gateway endpoint"
-GATEWAY_SVC=$(kubectl get svc -n envoy-gateway-system -l "gateway.envoyproxy.io/owning-gateway-name=$GATEWAY_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+GATEWAY_SVC=$(kubectl get svc -n envoy-gateway-system -l "gateway.envoyproxy.io/owning-gateway-name=$GATEWAY_NAME" -o jsonpath='{.items[0].metadata.name}' 2> /dev/null || echo "")
 
 if [ -z "$GATEWAY_SVC" ]; then
-    GATEWAY_SVC=$(kubectl get svc -n envoy-gateway-system -o jsonpath='{.items[?(@.spec.ports[0].port==8080)].metadata.name}' 2>/dev/null || echo "")
+    GATEWAY_SVC=$(kubectl get svc -n envoy-gateway-system -o jsonpath='{.items[?(@.spec.ports[0].port==8080)].metadata.name}' 2> /dev/null || echo "")
 fi
 
 if [ -z "$GATEWAY_SVC" ]; then
@@ -223,9 +223,9 @@ PROMPT_PAYLOAD='{
 
 log_info "Issuing HTTP POST to http://$GATEWAY_IP:$GATEWAY_PORT/v1/chat/completions..."
 INFERENCE_RESPONSE=$(docker exec oscar-test-nzh-control-plane curl -s -X POST "http://$GATEWAY_IP:$GATEWAY_PORT/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -H "x-ai-eg-model: $MODEL_NAME" \
-  -d "$PROMPT_PAYLOAD" 2>/dev/null || echo "")
+    -H "Content-Type: application/json" \
+    -H "x-ai-eg-model: $MODEL_NAME" \
+    -d "$PROMPT_PAYLOAD" 2> /dev/null || echo "")
 
 echo ""
 echo "==================== GATEWAY INFERENCE RESPONSE ===================="

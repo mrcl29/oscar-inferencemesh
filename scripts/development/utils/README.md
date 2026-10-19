@@ -4,11 +4,11 @@ This directory contains reusable helper scripts and utility modules used across 
 
 ## Files
 
-| File | Language | Description |
-| :--- | :--- | :--- |
-| [`logger.sh`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/utils/logger.sh) | Bash | Provides uniform ANSI color definitions and standardized logging helper functions: `log_info`, `log_warn`, `log_err`, and `log_step`. Also configures `GODEBUG="tlsmlkem=0"` to prevent TLS handshake connection resets with Kind and Docker proxies. |
-| [`parse_model_manifest.py`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/utils/parse_model_manifest.py) | Python 3 | Parses an OSCAR FDL model definition (e.g., `qwen.yml`) using PyYAML and extracts model attributes (`PARSED_MODEL_NAME`, `PARSED_STORAGE_URI`, `PARSED_RUNTIME_IMAGE`, `PARSED_MAX_MODEL_LEN`, `PARSED_KVCACHE_SPACE`) as shell variable export statements. |
-| [`patch_kind_deploy.py`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/utils/patch_kind_deploy.py) | Python 3 | Modifies OSCAR's upstream `kind-deploy.sh` script to enable non-interactive deployment, inject an internal DNS fix (`1.1.1.1` / `8.8.8.8` into `/etc/resolv.conf`), add resilient API server health check retry loops, and ensure proper exit codes on Traefik timeout. |
+| File                                                                                                                          | Language | Description                                                                                                                                                                                                                                                             |
+| :---------------------------------------------------------------------------------------------------------------------------- | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`logger.sh`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/utils/logger.sh)                             | Bash     | Provides uniform ANSI color definitions and standardized logging helper functions: `log_info`, `log_warn`, `log_err`, and `log_step`. Also configures `GODEBUG="tlsmlkem=0"` to prevent TLS handshake connection resets with Kind and Docker proxies.                   |
+| [`parse_model_manifest.py`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/utils/parse_model_manifest.py) | Python 3 | Parses an OSCAR FDL model definition (e.g., `qwen.yml`) using PyYAML and extracts model attributes (`PARSED_MODEL_NAME`, `PARSED_STORAGE_URI`, `PARSED_RUNTIME_IMAGE`, `PARSED_MAX_MODEL_LEN`, `PARSED_KVCACHE_SPACE`) as shell variable export statements.             |
+| [`patch_kind_deploy.py`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/utils/patch_kind_deploy.py)       | Python 3 | Modifies OSCAR's upstream `kind-deploy.sh` script to enable non-interactive deployment, inject an internal DNS fix (`1.1.1.1` / `8.8.8.8` into `/etc/resolv.conf`), add resilient API server health check retry loops, and ensure proper exit codes on Traefik timeout. |
 
 ## Usage
 
