@@ -1,0 +1,8 @@
+# Prettier configuration for YAML, Markdown, and JSON files
+semi: true
+singleQuote: false
+tabWidth: 2
+useTabs: false
+trailingComma: "es5"
+printWidth: 100
+proseWrap: "preserve"

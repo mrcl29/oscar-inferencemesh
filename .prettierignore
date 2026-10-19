@@ -1,0 +1,10 @@
+# Version control & cache
+.git
+__pycache__
+
+# Binary documents and media
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.svg
