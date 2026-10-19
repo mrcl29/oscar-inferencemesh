@@ -1,0 +1,60 @@
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: ${SERVICE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: ${SERVICE_NAME}
+    app.kubernetes.io/part-of: oscar-inferencemesh
+spec:
+  # Base reference preset for llm-d: provisions the Endpoint Picker (EPP) router and Gateway API InferencePool
+  baseRefs:
+  - name: kserve-config-llm-scheduler
+
+  # Target model specification
+  model:
+    name: ${MODEL_NAME}
+    uri: "${MODEL_STORAGE_URI}"
+
+  # Inference worker pool size (vLLM worker replicas)
+  replicas: ${REPLICAS}
+
+  # Router scheduler resource overrides
+  router:
+    scheduler:
+      template:
+        containers:
+        - name: main
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+
+  # vLLM worker container configuration
+  template:
+    containers:
+    - name: main
+      image: ${RUNTIME_IMAGE}
+      env:
+      - name: VLLM_CPU_KVCACHE_SPACE
+        value: "${VLLM_CPU_KVCACHE_SPACE}"
+      args:
+      - --dtype=auto
+      - --enforce-eager
+      - --max-model-len=${MAX_MODEL_LEN}
+      ports:
+      - containerPort: 8000
+        name: http
+        protocol: TCP
+      resources:
+        limits:
+          cpu: "${WORKER_CPU_LIMIT}"
+          memory: "${WORKER_MEMORY_LIMIT}"
+        requests:
+          cpu: "${WORKER_CPU_REQUEST}"
+          memory: "${WORKER_MEMORY_REQUEST}"
+      securityContext:
+        runAsNonRoot: false

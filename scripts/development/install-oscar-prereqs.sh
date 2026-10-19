@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export GODEBUG="tlsmlkem=0"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-# Output styling
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_err() { echo -e "${RED}[ERROR]${NC} $1"; }
+# shellcheck source=utils/logger.sh
+source "$SCRIPT_DIR/utils/logger.sh"
 
 # Require root/sudo privileges
 if [ "$EUID" -ne 0 ]; then
@@ -116,6 +109,12 @@ else
     log_info "Installing Helm..."
     curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
     log_info "Helm installed."
+fi
+
+# 6. Ensure localhost.direct resolves locally without relying on external DNS
+if ! grep -qE '\blocalhost\.direct\b' /etc/hosts; then
+    log_info "Adding localhost.direct mapping to /etc/hosts..."
+    echo "127.0.0.1 localhost.direct" >> /etc/hosts
 fi
 
 log_info "All tools are verified and ready to use."

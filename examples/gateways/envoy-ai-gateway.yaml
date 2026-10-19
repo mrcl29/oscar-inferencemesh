@@ -1,0 +1,24 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ${GATEWAY_NAME}
+  namespace: ${GATEWAY_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: ${GATEWAY_NAME}
+    app.kubernetes.io/part-of: oscar-inferencemesh
+spec:
+  gatewayClassName: eg
+  listeners:
+  - name: http
+    port: ${GATEWAY_PORT}
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: All

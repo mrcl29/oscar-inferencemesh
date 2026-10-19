@@ -1,18 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Disable post-quantum key agreement in Go
-export GODEBUG="tlsmlkem=0"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-# Output styling
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_err() { echo -e "${RED}[ERROR]${NC} $1"; }
+# shellcheck source=utils/logger.sh
+source "$SCRIPT_DIR/utils/logger.sh"
 
 # 1. Architecture detection
 ARCH=$(uname -m)
@@ -71,17 +63,25 @@ oscar-cli cluster default -s local
 
 # 5. Check cluster health with retries
 log_info "Testing cluster health (waiting for ingress route)..."
-max_retries=15
+
+if ! getent hosts localhost.direct &>/dev/null; then
+    log_warn "localhost.direct cannot be resolved via DNS. Consider adding '127.0.0.1 localhost.direct' to /etc/hosts."
+fi
+
+max_retries=30
 counter=1
 until oscar-cli health &>/dev/null; do
     if [ "$counter" -ge "$max_retries" ]; then
+        echo ""
         log_err "Cluster health check failed after $max_retries attempts."
         oscar-cli health
         exit 1
     fi
+    echo -n "."
     sleep 2
     counter=$((counter + 1))
 done
+echo ""
 oscar-cli health
 
 MINIO_PASS=$(kubectl -n minio get secret minio -o jsonpath='{.data.rootPassword}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
