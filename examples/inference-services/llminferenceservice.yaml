@@ -47,7 +47,6 @@ spec:
           - --max-model-len=${MAX_MODEL_LEN}
         ports:
           - containerPort: 8000
-            name: http
             protocol: TCP
         resources:
           limits:

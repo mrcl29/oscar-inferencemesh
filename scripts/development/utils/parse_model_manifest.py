@@ -19,6 +19,8 @@ def main():
     runtime = "ghcr.io/grycap/kserve-vllm-openai-cpu:v0.22.1"
     max_len = "2048"
     kv_space = "1"
+    cpu = "2.0"
+    memory = "5.5Gi"
 
     try:
         with open(filepath, "r") as f:
@@ -33,6 +35,8 @@ def main():
                 uri = ks.get("storage_uri", uri)
                 llm = ks.get("llm_inference", {})
                 runtime = llm.get("runtime_image", runtime)
+                cpu = str(ks.get("cpu", cpu))
+                memory = str(ks.get("memory", memory))
 
                 for arg in ks.get("args", []):
                     if "--max-model-len" in str(arg):
@@ -51,6 +55,8 @@ def main():
     print(f'PARSED_RUNTIME_IMAGE="{runtime}"')
     print(f'PARSED_MAX_MODEL_LEN="{max_len}"')
     print(f'PARSED_KVCACHE_SPACE="{kv_space}"')
+    print(f'PARSED_CPU="{cpu}"')
+    print(f'PARSED_MEMORY="{memory}"')
 
 
 if __name__ == "__main__":

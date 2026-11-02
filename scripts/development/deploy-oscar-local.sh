@@ -17,6 +17,7 @@ if [ -n "$existing_cluster" ]; then
             if [ "${ready_replicas:-0}" -ge 1 ]; then
                 log_info "OSCAR is already deployed and ready in '$existing_cluster'. Skipping re-creation."
                 kubectl config use-context "$ctx" &> /dev/null || true
+                bash "$SCRIPT_DIR/deploy-envoy-ai-gateway.sh"
                 exit 0
             fi
         fi
@@ -59,3 +60,6 @@ log_info "Verifying that OSCAR and Traefik deployments are Available..."
 kubectl -n oscar wait --for=condition=Available deployment/oscar --timeout=180s
 kubectl -n traefik wait --for=condition=Available deployment/traefik --timeout=180s 2> /dev/null || true
 log_info "OSCAR and Traefik deployments verified successfully."
+
+# 6. Deploy Envoy Gateway and Envoy AI Gateway platform infrastructure
+bash "$SCRIPT_DIR/deploy-envoy-ai-gateway.sh"

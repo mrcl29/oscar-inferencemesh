@@ -1,3 +1,28 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: ${GATEWAY_NAME}-proxy-config
+  namespace: ${GATEWAY_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: ${GATEWAY_NAME}-proxy-config
+    app.kubernetes.io/part-of: oscar-inferencemesh
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: NodePort
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              ports:
+                - name: http-${GATEWAY_PORT}
+                  port: ${GATEWAY_PORT}
+                  targetPort: ${GATEWAY_PORT}
+                  nodePort: 30880
+                  protocol: TCP
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
@@ -15,6 +40,11 @@ metadata:
     app.kubernetes.io/part-of: oscar-inferencemesh
 spec:
   gatewayClassName: eg
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: ${GATEWAY_NAME}-proxy-config
   listeners:
     - name: http
       port: ${GATEWAY_PORT}

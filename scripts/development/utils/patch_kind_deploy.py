@@ -51,6 +51,16 @@ def patch_kind_deploy(filepath: str) -> None:
     if target2 in content:
         content = content.replace(target2, replacement2)
 
+    # 3. Expose Envoy AI Gateway NodePort (30880) on host localhost:8080
+    target3 = "  extraPortMappings:\n"
+    replacement3 = """  extraPortMappings:
+  - containerPort: 30880
+    hostPort: 8080
+    protocol: TCP
+"""
+    if "containerPort: 30880" not in content and target3 in content:
+        content = content.replace(target3, replacement3)
+
     with open(filepath, "w") as f:
         f.write(content)
 

@@ -90,11 +90,11 @@ export MAX_MODEL_LEN="${MAX_MODEL_LEN:-$PARSED_MAX_MODEL_LEN}"
 export VLLM_CPU_KVCACHE_SPACE="${VLLM_CPU_KVCACHE_SPACE:-$PARSED_KVCACHE_SPACE}"
 export REPLICAS="${REPLICAS:-1}"
 
-# Sane worker limits tuned for 14GB RAM hosts
-export WORKER_CPU_LIMIT="${WORKER_CPU_LIMIT:-2}"
-export WORKER_MEMORY_LIMIT="${WORKER_MEMORY_LIMIT:-5.5Gi}"
-export WORKER_CPU_REQUEST="${WORKER_CPU_REQUEST:-250m}"
-export WORKER_MEMORY_REQUEST="${WORKER_MEMORY_REQUEST:-800Mi}"
+# Worker limits matching parsed model manifest by default
+export WORKER_CPU_LIMIT="${WORKER_CPU_LIMIT:-$PARSED_CPU}"
+export WORKER_MEMORY_LIMIT="${WORKER_MEMORY_LIMIT:-$PARSED_MEMORY}"
+export WORKER_CPU_REQUEST="${WORKER_CPU_REQUEST:-$PARSED_CPU}"
+export WORKER_MEMORY_REQUEST="${WORKER_MEMORY_REQUEST:-$PARSED_MEMORY}"
 
 # Dynamic Gateway & Route wiring
 export GATEWAY_NAME="${GATEWAY_NAME:-envoy-ai-gateway}"
@@ -140,6 +140,8 @@ if [ "$CLEAN_MODE" = true ]; then
     if [ "$CLEAN_GATEWAY" = true ]; then
         log_info "4. Deleting Envoy AI Gateway infrastructure..."
         kubectl delete gateway "$GATEWAY_NAME" -n "$GATEWAY_NAMESPACE" --ignore-not-found=true
+        kubectl delete envoyproxy "${GATEWAY_NAME}-proxy-config" -n "$GATEWAY_NAMESPACE" --ignore-not-found=true
+        docker rm -f envoy-ai-gateway-localhost-proxy &> /dev/null || true
     else
         log_info "4. Keeping shared Envoy AI Gateway infrastructure intact (use --clean-all to delete)."
     fi
@@ -155,6 +157,59 @@ fi
 log_step "2. Dynamically deploying Envoy Gateway infrastructure"
 envsubst < "$GATEWAY_YAML" | kubectl apply -f -
 
+log_info "Waiting for Envoy AI Gateway service to be provisioned..."
+GATEWAY_SVC=""
+for _ in $(seq 1 30); do
+    GATEWAY_SVC=$(kubectl get svc -n envoy-gateway-system -l "gateway.envoyproxy.io/owning-gateway-name=$GATEWAY_NAME" -o jsonpath='{.items[0].metadata.name}' 2> /dev/null || echo "")
+    if [ -n "$GATEWAY_SVC" ]; then
+        break
+    fi
+    sleep 1
+done
+
+if [ -z "$GATEWAY_SVC" ]; then
+    log_err "Could not resolve Envoy AI Gateway service in namespace 'envoy-gateway-system'."
+    exit 1
+fi
+
+CONTROL_PLANE_NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+NODE_IP=$(docker inspect "$CONTROL_PLANE_NODE" -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2> /dev/null || echo "127.0.0.1")
+GATEWAY_IP=$(kubectl get svc -n envoy-gateway-system "$GATEWAY_SVC" -o jsonpath='{.spec.clusterIP}')
+GATEWAY_NODE_PORT=$(kubectl get svc -n envoy-gateway-system "$GATEWAY_SVC" -o jsonpath='{.spec.ports[0].nodePort}')
+
+# Ensure localhost:${GATEWAY_PORT} is accessible on the host (bridges existing Kind clusters without hostPort 8080)
+if ! curl -s -m 1 "http://localhost:${GATEWAY_PORT}/" &> /dev/null; then
+    docker rm -f envoy-ai-gateway-localhost-proxy &> /dev/null || true
+    docker run -d --name envoy-ai-gateway-localhost-proxy --restart unless-stopped \
+        --network kind -p "127.0.0.1:${GATEWAY_PORT}:8080" \
+        nginx:latest sh -c "cat <<'EOF' > /etc/nginx/conf.d/default.conf
+server {
+    listen 8080;
+    location / {
+        proxy_pass http://${NODE_IP}:${GATEWAY_NODE_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_read_timeout 300s;
+    }
+}
+EOF
+nginx -g 'daemon off;'" &> /dev/null || true
+fi
+
+GATEWAY_LOCAL_URL="http://localhost:${GATEWAY_PORT}"
+GATEWAY_NODE_URL="http://${NODE_IP}:${GATEWAY_NODE_PORT}"
+GATEWAY_CLUSTER_URL="http://${GATEWAY_IP}:${GATEWAY_PORT}"
+
+log_info "Envoy AI Gateway Access URLs:"
+log_info "  - Localhost URL:    $GATEWAY_LOCAL_URL"
+log_info "  - Direct Node URL:  $GATEWAY_NODE_URL"
+log_info "  - Cluster IP URL:   $GATEWAY_CLUSTER_URL"
+log_info "Available OpenAI-Compatible Endpoints:"
+log_info "  - POST ${GATEWAY_LOCAL_URL}/v1/chat/completions"
+log_info "  - POST ${GATEWAY_LOCAL_URL}/v1/completions"
+log_info "  - POST ${GATEWAY_LOCAL_URL}/v1/embeddings"
+log_info "  - GET  ${GATEWAY_LOCAL_URL}/v1/models"
+
 # 4. Deploy Model via OSCAR CLI (Independent Model layer)
 log_step "3. Registering model in OSCAR"
 if command -v oscar-cli &> /dev/null; then
@@ -166,6 +221,19 @@ if command -v oscar-cli &> /dev/null; then
     fi
 else
     log_warn "oscar-cli not found, skipping OSCAR registration (Kubernetes direct mode)."
+fi
+
+# Synchronize exact resource values from existing OSCAR service to avoid triggering redundant RollingUpdates
+if kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" &> /dev/null; then
+    EXISTING_CPU_LIMIT=$(kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.containers[0].resources.limits.cpu}' 2> /dev/null || echo "")
+    EXISTING_MEM_LIMIT=$(kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.containers[0].resources.limits.memory}' 2> /dev/null || echo "")
+    EXISTING_CPU_REQ=$(kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.containers[0].resources.requests.cpu}' 2> /dev/null || echo "")
+    EXISTING_MEM_REQ=$(kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.containers[0].resources.requests.memory}' 2> /dev/null || echo "")
+
+    [ -n "$EXISTING_CPU_LIMIT" ] && export WORKER_CPU_LIMIT="$EXISTING_CPU_LIMIT"
+    [ -n "$EXISTING_MEM_LIMIT" ] && export WORKER_MEMORY_LIMIT="$EXISTING_MEM_LIMIT"
+    [ -n "$EXISTING_CPU_REQ" ] && export WORKER_CPU_REQUEST="$EXISTING_CPU_REQ"
+    [ -n "$EXISTING_MEM_REQ" ] && export WORKER_MEMORY_REQUEST="$EXISTING_MEM_REQ"
 fi
 
 # 5. Deploy LLMInferenceService & Router Scheduler (Independent Service layer)
@@ -194,22 +262,9 @@ log_info "Checking InferencePool and Route status..."
 kubectl -n "$NAMESPACE" get inferencepool "${SERVICE_NAME}-inference-pool" || true
 kubectl -n "$NAMESPACE" get aigatewayroute "$ROUTE_NAME" || true
 
-# 8. Detect Envoy AI Gateway Endpoint
-log_step "7. Resolving Envoy AI Gateway endpoint"
-GATEWAY_SVC=$(kubectl get svc -n envoy-gateway-system -l "gateway.envoyproxy.io/owning-gateway-name=$GATEWAY_NAME" -o jsonpath='{.items[0].metadata.name}' 2> /dev/null || echo "")
-
-if [ -z "$GATEWAY_SVC" ]; then
-    GATEWAY_SVC=$(kubectl get svc -n envoy-gateway-system -o jsonpath='{.items[?(@.spec.ports[0].port==8080)].metadata.name}' 2> /dev/null || echo "")
-fi
-
-if [ -z "$GATEWAY_SVC" ]; then
-    log_err "Could not resolve Envoy AI Gateway service in namespace 'envoy-gateway-system'."
-    exit 1
-fi
-
-GATEWAY_IP=$(kubectl get svc -n envoy-gateway-system "$GATEWAY_SVC" -o jsonpath='{.spec.clusterIP}')
-GATEWAY_PORT=$(kubectl get svc -n envoy-gateway-system "$GATEWAY_SVC" -o jsonpath='{.spec.ports[0].port}')
-log_info "Envoy AI Gateway is active at http://$GATEWAY_IP:$GATEWAY_PORT"
+# 8. Verify Envoy AI Gateway Endpoint
+log_step "7. Verifying Envoy AI Gateway endpoint"
+log_info "Envoy AI Gateway is active at $GATEWAY_LOCAL_URL (Node: $GATEWAY_NODE_URL, Cluster: $GATEWAY_CLUSTER_URL)"
 
 # 9. Execute Test Inference Request via curl
 log_step "8. Sending test inference request for model: '$MODEL_NAME'"
@@ -221,8 +276,8 @@ PROMPT_PAYLOAD='{
   "max_tokens": 50
 }'
 
-log_info "Issuing HTTP POST to http://$GATEWAY_IP:$GATEWAY_PORT/v1/chat/completions..."
-INFERENCE_RESPONSE=$(docker exec oscar-test-nzh-control-plane curl -s -X POST "http://$GATEWAY_IP:$GATEWAY_PORT/v1/chat/completions" \
+log_info "Issuing HTTP POST to ${GATEWAY_LOCAL_URL}/v1/chat/completions..."
+INFERENCE_RESPONSE=$(curl -s -X POST "${GATEWAY_LOCAL_URL}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -H "x-ai-eg-model: $MODEL_NAME" \
     -d "$PROMPT_PAYLOAD" 2> /dev/null || echo "")
