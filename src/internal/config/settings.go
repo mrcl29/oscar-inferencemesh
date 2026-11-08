@@ -27,10 +27,44 @@ type Settings struct {
 	MaxReplicas               int           `json:"max_replicas"`
 }
 
-// FromEnv loads EPP configuration from environment variables with sensible local defaults.
+// FromEnv loads EPP configuration with full hierarchical precedence:
+// Environment Variables > Persistent File (~/.config/inferencemesh/config.yaml) > Built-in Defaults.
 func FromEnv() Settings {
-	model := envOrDefault("EPP_MODEL_NAME", "qwen2-5-05b-instruct")
-	namespace := envOrDefault("EPP_NAMESPACE", "oscar-svc")
+	// 1. Start with built-in defaults
+	model := "qwen2-5-05b-instruct"
+	namespace := "oscar-svc"
+	httpPort := 9091
+	grpcPort := 9002
+	oscarEndpoint := "https://localhost.direct"
+	oscarClusterID := "local"
+	oscarVerifySSL := false
+
+	// 2. Overlay persistent file config if present
+	if fileCfg, err := LoadOrCreateFileConfig(""); err == nil && fileCfg != nil {
+		if fileCfg.Defaults.Model != "" {
+			model = fileCfg.Defaults.Model
+		}
+		if fileCfg.Defaults.Namespace != "" {
+			namespace = fileCfg.Defaults.Namespace
+		}
+		if fileCfg.Defaults.HTTPPort > 0 {
+			httpPort = fileCfg.Defaults.HTTPPort
+		}
+		if fileCfg.Defaults.GRPCPort > 0 {
+			grpcPort = fileCfg.Defaults.GRPCPort
+		}
+		if name, cluster, ok := fileCfg.GetActiveCluster(); ok {
+			oscarClusterID = name
+			if cluster.Endpoint != "" {
+				oscarEndpoint = cluster.Endpoint
+			}
+			oscarVerifySSL = cluster.SSLVerify
+		}
+	}
+
+	// 3. Overlay Environment Variables (highest non-flag precedence)
+	model = envOrDefault("EPP_MODEL_NAME", model)
+	namespace = envOrDefault("EPP_NAMESPACE", namespace)
 	defaultFQDN := envOrDefault(
 		"EPP_DEFAULT_BACKEND_FQDN",
 		fmt.Sprintf("%s-kserve-workload-svc.%s.svc.cluster.local", model, namespace),
@@ -40,21 +74,29 @@ func FromEnv() Settings {
 
 	return Settings{
 		HTTPHost:                  envOrDefault("EPP_HTTP_HOST", "0.0.0.0"),
-		HTTPPort:                  envIntOrDefault("EPP_HTTP_PORT", 9091),
-		GRPCExtProcPort:           envIntOrDefault("EPP_GRPC_PORT", 9002),
+		HTTPPort:                  envIntOrDefault("EPP_HTTP_PORT", httpPort),
+		GRPCExtProcPort:           envIntOrDefault("EPP_GRPC_PORT", grpcPort),
 		ModelName:                 model,
 		Namespace:                 namespace,
 		DefaultBackendFQDN:        defaultFQDN,
 		DefaultBackendPort:        envIntOrDefault("EPP_DEFAULT_BACKEND_PORT", 8000),
 		MetricsScrapeTimeout:      time.Duration(timeoutSec * float64(time.Second)),
-		OscarEndpoint:             envOrDefault("OSCAR_ENDPOINT", "https://localhost.direct"),
-		OscarClusterID:            envOrDefault("OSCAR_CLUSTER_ID", "local"),
-		OscarVerifySSL:            envOrDefault("OSCAR_VERIFY_SSL", "false") == "true",
+		OscarEndpoint:             envOrDefault("OSCAR_ENDPOINT", oscarEndpoint),
+		OscarClusterID:            envOrDefault("OSCAR_CLUSTER_ID", oscarClusterID),
+		OscarVerifySSL:            envBoolOrDefault("OSCAR_VERIFY_SSL", oscarVerifySSL),
 		KVCacheUpscaleThreshold:   envFloatOrDefault("EPP_KV_CACHE_THRESHOLD", 0.80),
 		WaitingQueueUpscaleThresh: envIntOrDefault("EPP_QUEUE_THRESHOLD", 5),
 		MinReplicas:               envIntOrDefault("EPP_MIN_REPLICAS", 1),
 		MaxReplicas:               envIntOrDefault("EPP_MAX_REPLICAS", 4),
 	}
+}
+
+func envBoolOrDefault(key string, fallback bool) bool {
+	val, ok := os.LookupEnv(key)
+	if !ok || val == "" {
+		return fallback
+	}
+	return val == "true" || val == "1"
 }
 
 func envOrDefault(key, fallback string) string {

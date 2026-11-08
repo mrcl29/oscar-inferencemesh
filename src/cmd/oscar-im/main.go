@@ -1,4 +1,4 @@
-// Package main implements the inferencemesh CLI tool for OSCAR InferenceMesh.
+// Package main implements the oscar-im CLI tool for OSCAR InferenceMesh.
 package main
 
 import (
@@ -17,12 +17,12 @@ import (
 const (
 	cliVersion = "0.1.0"
 	banner     = `
-   ____  ____  _________    ____     ____  ____ 
-  / __ \/ ___// ____/   |  / __ \   /  _/ / __ \
- / / / /\__ \/ /   / /| | / /_/ /   / /  / / / /
-/ /_/ /___/ / /___/ ___ |/ _, _/  _/ /  / /_/ / 
-\____//____/\____/_/  |_/_/ |_|  /___/ /_____/  
-        OSCAR InferenceMesh Control CLI v` + cliVersion + "\n"
+   ____  _____ _____ ___     ____          ________  ___
+  / __ \/ ___// ____//   |   / __ \        /  _/   |/  /
+ / / / /\__ \/ /    / /| |  / /_/ / _____  / / / /|_/ / 
+/ /_/ /___/ / /___ / ___ | / _, _/ /____/ / / / /  / /  
+\____//____/\____//_/  |_|/_/ |_|       /___//_/  /_/   
+OSCAR-IM v` + cliVersion + "\n"
 )
 
 type initOptions struct {
@@ -46,8 +46,10 @@ func main() {
 	switch command {
 	case "init":
 		handleInit(os.Args[2:])
+	case "config":
+		handleConfig(os.Args[2:])
 	case "version", "--version", "-v":
-		fmt.Printf("inferencemesh CLI version %s\n", cliVersion)
+		fmt.Printf("oscar-im CLI version %s\n", cliVersion)
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -59,33 +61,72 @@ func main() {
 
 func printUsage() {
 	fmt.Print(banner)
-	fmt.Println("Usage: inferencemesh <command> [options]")
+	fmt.Println("Usage: oscar-im <command> [options]")
 	fmt.Println()
 	fmt.Println("Available Commands:")
 	fmt.Println("  init       Initialize and deploy the Envoy AI Gateway, EPP, and Patrón B ext_proc filter")
+	fmt.Println("  config     View and edit persistent configuration (~/.config/oscar-im/config.yaml)")
 	fmt.Println("  version    Display the CLI version")
 	fmt.Println("  help       Show help information")
 	fmt.Println()
-	fmt.Println("Run 'inferencemesh <command> --help' for details on specific command options.")
+	fmt.Println("Run 'oscar-im <command> --help' for details on specific command options.")
+}
+
+func handleConfig(args []string) {
+	if err := config.RunConfigCommand(args, os.Stdin, os.Stdout); err != nil {
+		logErr(err.Error())
+		os.Exit(1)
+	}
 }
 
 func handleInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 
+	fileCfg, _ := config.LoadOrCreateFileConfig("")
+	defaultEndpoint := "https://localhost.direct"
+	defaultCluster := "local"
+	defaultModel := "qwen2-5-05b-instruct"
+	defaultNamespace := "oscar-svc"
+	defaultHTTPPort := 9091
+	defaultGRPCPort := 9002
+	defaultDocker := false
+
+	if fileCfg != nil {
+		if fileCfg.Defaults.Model != "" {
+			defaultModel = fileCfg.Defaults.Model
+		}
+		if fileCfg.Defaults.Namespace != "" {
+			defaultNamespace = fileCfg.Defaults.Namespace
+		}
+		if fileCfg.Defaults.HTTPPort > 0 {
+			defaultHTTPPort = fileCfg.Defaults.HTTPPort
+		}
+		if fileCfg.Defaults.GRPCPort > 0 {
+			defaultGRPCPort = fileCfg.Defaults.GRPCPort
+		}
+		defaultDocker = fileCfg.Defaults.Docker
+		if clusterName, cl, ok := fileCfg.GetActiveCluster(); ok {
+			defaultCluster = clusterName
+			if cl.Endpoint != "" {
+				defaultEndpoint = cl.Endpoint
+			}
+		}
+	}
+
 	opts := initOptions{}
-	fs.BoolVar(&opts.docker, "docker", false, "Deploy EPP inside Kubernetes/Docker container instead of a local host process (default: false)")
+	fs.BoolVar(&opts.docker, "docker", defaultDocker, "Deploy EPP inside Kubernetes/Docker container instead of a local host process")
 	fs.BoolVar(&opts.skipGateway, "skip-gateway", false, "Skip Envoy AI Gateway deployment check (default: false)")
-	fs.StringVar(&opts.oscarEndpoint, "oscar-endpoint", envOrDefault("OSCAR_ENDPOINT", "https://localhost.direct"), "OSCAR REST endpoint URL")
-	fs.StringVar(&opts.oscarCluster, "oscar-cluster", envOrDefault("OSCAR_CLUSTER_ID", "local"), "OSCAR cluster ID in ~/.oscar.yaml")
-	fs.StringVar(&opts.modelName, "model", envOrDefault("EPP_MODEL_NAME", "qwen2-5-05b-instruct"), "Target LLM model name registered in OSCAR")
-	fs.StringVar(&opts.namespace, "namespace", envOrDefault("EPP_NAMESPACE", "oscar-svc"), "Target Kubernetes namespace")
-	fs.IntVar(&opts.httpPort, "http-port", 9091, "EPP HTTP verification server port")
-	fs.IntVar(&opts.grpcPort, "grpc-port", 9002, "EPP gRPC ext_proc server port")
+	fs.StringVar(&opts.oscarEndpoint, "oscar-endpoint", envOrDefault("OSCAR_ENDPOINT", defaultEndpoint), "OSCAR REST endpoint URL")
+	fs.StringVar(&opts.oscarCluster, "oscar-cluster", envOrDefault("OSCAR_CLUSTER_ID", defaultCluster), "OSCAR cluster ID in configuration")
+	fs.StringVar(&opts.modelName, "model", envOrDefault("EPP_MODEL_NAME", defaultModel), "Target LLM model name registered in OSCAR")
+	fs.StringVar(&opts.namespace, "namespace", envOrDefault("EPP_NAMESPACE", defaultNamespace), "Target Kubernetes namespace")
+	fs.IntVar(&opts.httpPort, "http-port", defaultHTTPPort, "EPP HTTP verification server port")
+	fs.IntVar(&opts.grpcPort, "grpc-port", defaultGRPCPort, "EPP gRPC ext_proc server port")
 
 	_ = fs.Parse(args)
 
 	fmt.Print(banner)
-	fmt.Println("===> Initializing OSCAR InferenceMesh...")
+	fmt.Println("===> Initializing OSCAR-IM...")
 	fmt.Printf("  - Deployment Mode:    %s\n", deploymentModeString(opts.docker))
 	fmt.Printf("  - Model Target:       %s\n", opts.modelName)
 	fmt.Printf("  - Namespace:          %s\n", opts.namespace)
