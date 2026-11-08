@@ -250,7 +250,7 @@ log_info "Waiting for router scheduler rollout..."
 while ! kubectl -n "$NAMESPACE" get deployment "${SERVICE_NAME}-kserve-router-scheduler" &> /dev/null; do
     sleep 2
 done
-kubectl -n "$NAMESPACE" rollout status "deployment/${SERVICE_NAME}-kserve-router-scheduler" --timeout=120s
+kubectl -n "$NAMESPACE" rollout status "deployment/${SERVICE_NAME}-kserve-router-scheduler" --timeout=300s
 
 log_info "Waiting for vLLM inference worker pool rollout..."
 while ! kubectl -n "$NAMESPACE" get deployment "${SERVICE_NAME}-kserve" &> /dev/null; do

@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oscar-inferencemesh-epp
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: oscar-inferencemesh-epp
+    app.kubernetes.io/part-of: oscar-inferencemesh
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: oscar-inferencemesh-epp-role
+  namespace: ${NAMESPACE}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: oscar-inferencemesh-epp-rolebinding
+  namespace: ${NAMESPACE}
+subjects:
+  - kind: ServiceAccount
+    name: oscar-inferencemesh-epp
+    namespace: ${NAMESPACE}
+roleRef:
+  kind: Role
+  name: oscar-inferencemesh-epp-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oscar-inferencemesh-epp
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: oscar-inferencemesh-epp
+    app.kubernetes.io/part-of: oscar-inferencemesh
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: oscar-inferencemesh-epp
+  ports:
+    - name: grpc-extproc
+      port: 9002
+      targetPort: 9002
+      protocol: TCP
+    - name: http-verify
+      port: 9091
+      targetPort: 9091
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oscar-inferencemesh-epp
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: oscar-inferencemesh-epp
+    app.kubernetes.io/part-of: oscar-inferencemesh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oscar-inferencemesh-epp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oscar-inferencemesh-epp
+        app.kubernetes.io/part-of: oscar-inferencemesh
+    spec:
+      serviceAccountName: oscar-inferencemesh-epp
+      containers:
+        - name: epp
+          image: ${EPP_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc-extproc
+              containerPort: 9002
+              protocol: TCP
+            - name: http-verify
+              containerPort: 9091
+              protocol: TCP
+          env:
+            - name: EPP_MODEL_NAME
+              value: "${MODEL_NAME}"
+            - name: EPP_NAMESPACE
+              value: "${NAMESPACE}"
+            - name: EPP_HTTP_PORT
+              value: "9091"
+            - name: EPP_GRPC_PORT
+              value: "9002"
+            - name: OSCAR_ENDPOINT
+              value: "${OSCAR_ENDPOINT}"
+            - name: OSCAR_CLUSTER_ID
+              value: "${OSCAR_CLUSTER_ID}"
+            - name: OSCAR_VERIFY_SSL
+              value: "${OSCAR_VERIFY_SSL}"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http-verify
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http-verify
+            initialDelaySeconds: 2
+            periodSeconds: 5

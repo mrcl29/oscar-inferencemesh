@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+# Multi-stage build for the OSCAR InferenceMesh Endpoint Picker (EPP)
+FROM golang:alpine AS builder
+
+WORKDIR /app
+ENV GOTOOLCHAIN=auto
+
+# Copy dependency manifests
+COPY src/go.mod src/go.sum* ./
+RUN go mod download
+
+# Copy source code
+COPY src/ ./
+
+# Compile static binary for Linux
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/epp ./cmd/epp
+
+# Final minimal runner image
+FROM alpine:3.20
+
+RUN apk --no-cache add ca-certificates curl tzdata
+
+COPY --from=builder /bin/epp /usr/local/bin/epp
+
+EXPOSE 9002 9091
+
+ENTRYPOINT ["/usr/local/bin/epp"]
