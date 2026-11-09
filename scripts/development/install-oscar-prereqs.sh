@@ -33,11 +33,11 @@ if command -v docker &> /dev/null; then
 else
     log_info "Installing Docker via package manager..."
     if command -v pacman &> /dev/null; then
-        pacman -Sy --noconfirm curl ca-certificates docker
+        pacman -Sy --noconfirm curl ca-certificates docker gettext
     elif command -v apt-get &> /dev/null; then
-        apt-get update -y && apt-get install -y ca-certificates curl docker.io
+        apt-get update -y && apt-get install -y ca-certificates curl docker.io gettext-base
     elif command -v dnf &> /dev/null; then
-        dnf install -y curl ca-certificates moby-engine
+        dnf install -y curl ca-certificates moby-engine gettext
     else
         log_err "No supported package manager found (pacman, apt-get, or dnf)."
         exit 1
@@ -111,7 +111,21 @@ else
     log_info "Helm installed."
 fi
 
-# 6. Ensure localhost.direct resolves locally without relying on external DNS
+# 6. Ensure envsubst is available
+if command -v envsubst &> /dev/null; then
+    log_info "envsubst is already installed."
+else
+    log_info "Installing gettext for envsubst..."
+    if command -v pacman &> /dev/null; then
+        pacman -Sy --noconfirm gettext
+    elif command -v apt-get &> /dev/null; then
+        apt-get update -y && apt-get install -y gettext-base
+    elif command -v dnf &> /dev/null; then
+        dnf install -y gettext
+    fi
+fi
+
+# 7. Ensure localhost.direct resolves locally without relying on external DNS
 if ! grep -qE '\blocalhost\.direct\b' /etc/hosts; then
     log_info "Adding localhost.direct mapping to /etc/hosts..."
     echo "127.0.0.1 localhost.direct" >> /etc/hosts
