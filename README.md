@@ -35,14 +35,24 @@ flowchart TD
 ./scripts/production/install-dependencies.sh
 ```
 
-### 2. Initialize the Mesh
+### 2. Build the CLI Binary
+
+Compile the standalone `oscar-im` binary from source:
+
+```bash
+go build -C src -o bin/oscar-im ./cmd/oscar-im
+# Or navigate to src and build directly:
+# cd src && go build -o bin/oscar-im ./cmd/oscar-im
+```
+
+### 3. Initialize the Mesh
 
 ```bash
 # Using the CLI
 ./src/bin/oscar-im init --docker
 ```
 
-### 3. Verify Inference
+### 4. Verify Inference
 
 ```bash
 ./examples/requests/curl-inference.sh "¿Qué es la arquitectura hexagonal?"
