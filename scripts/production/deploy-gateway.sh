@@ -77,6 +77,25 @@ if [ "$UNINSTALL" = true ]; then
     exit 0
 fi
 
+# Pre-flight check: ensure Kubernetes API server is reachable with retries
+MAX_RETRIES="${K8S_MAX_RETRIES:-15}"
+RETRY_DELAY="${K8S_RETRY_DELAY:-2}"
+k8s_ready=false
+
+for ((i = 1; i <= MAX_RETRIES; i++)); do
+    if kubectl cluster-info --request-timeout=3s &> /dev/null; then
+        k8s_ready=true
+        break
+    fi
+    log_warn "Kubernetes API server not ready yet. Waiting (attempt $i/$MAX_RETRIES)..."
+    sleep "$RETRY_DELAY"
+done
+
+if [ "$k8s_ready" = false ]; then
+    log_err "Kubernetes cluster is unreachable. Please verify that your cluster is running ('kind get clusters' or 'docker ps') and that your current kubeconfig context is valid."
+    exit 1
+fi
+
 # Idempotency check: are both deployments already running and configured with Backend API?
 eg_ready=false
 aieg_ready=false

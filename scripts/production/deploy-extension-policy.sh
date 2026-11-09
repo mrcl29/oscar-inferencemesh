@@ -25,18 +25,25 @@ export EXTENSION_POLICY_NAME="${EXTENSION_POLICY_NAME:-envoy-ai-gateway-epp-ext-
 POLICY_YAML="$REPO_ROOT/deploy/gateways/envoy-extension-policy.yaml"
 
 DELETE_MODE=false
+FORCE="${FORCE:-false}"
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --delete | --clean)
             DELETE_MODE=true
             shift
             ;;
+        --force)
+            FORCE=true
+            shift
+            ;;
         --help | -h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
-            echo "Applies or removes the EnvoyExtensionPolicy (ext_proc gRPC filter - Patrón B)."
+            echo "Applies or removes the EnvoyExtensionPolicy (ext_proc gRPC filter)."
             echo ""
             echo "Options:"
+            echo "  --force             Reapply policy even if already configured and Accepted"
             echo "  --delete, --clean   Delete the EnvoyExtensionPolicy from the cluster"
             echo "  --help, -h          Display this help message"
             exit 0
@@ -60,7 +67,16 @@ if [ "$DELETE_MODE" = true ]; then
     exit 0
 fi
 
-log_step "Applying EnvoyExtensionPolicy (Patrón B: ext_proc gRPC on port $EPP_GRPC_PORT)..."
+# Idempotency check: is the EnvoyExtensionPolicy already accepted?
+if [ "$FORCE" = false ] && kubectl get envoyextensionpolicy "$EXTENSION_POLICY_NAME" -n "$NAMESPACE" &> /dev/null; then
+    status=$(kubectl get envoyextensionpolicy "$EXTENSION_POLICY_NAME" -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2> /dev/null || echo "")
+    if [ "$status" = "True" ]; then
+        log_info "EnvoyExtensionPolicy '$EXTENSION_POLICY_NAME' is already configured and Accepted. Skipping."
+        exit 0
+    fi
+fi
+
+log_step "Applying EnvoyExtensionPolicy (ext_proc gRPC on port $EPP_GRPC_PORT)..."
 if [ ! -f "$POLICY_YAML" ]; then
     log_err "Policy manifest not found: $POLICY_YAML"
     exit 1

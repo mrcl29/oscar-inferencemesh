@@ -8,9 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/grycap/oscar-inferencemesh/src/internal/config"
+	"github.com/grycap/oscar-inferencemesh/src/internal/infrastructure/k8s"
 	"github.com/grycap/oscar-inferencemesh/src/internal/infrastructure/oscar"
 )
 
@@ -28,6 +30,7 @@ OSCAR-IM v` + cliVersion + "\n"
 type initOptions struct {
 	docker        bool
 	skipGateway   bool
+	force         bool
 	oscarEndpoint string
 	oscarCluster  string
 	modelName     string
@@ -64,7 +67,7 @@ func printUsage() {
 	fmt.Println("Usage: oscar-im <command> [options]")
 	fmt.Println()
 	fmt.Println("Available Commands:")
-	fmt.Println("  init       Initialize and deploy the Envoy AI Gateway, EPP, and Patrón B ext_proc filter")
+	fmt.Println("  init       Initialize and deploy the Envoy AI Gateway, EPP, and ext_proc filter")
 	fmt.Println("  config     View and edit persistent configuration (~/.config/oscar-im/config.yaml)")
 	fmt.Println("  version    Display the CLI version")
 	fmt.Println("  help       Show help information")
@@ -116,6 +119,7 @@ func handleInit(args []string) {
 	opts := initOptions{}
 	fs.BoolVar(&opts.docker, "docker", defaultDocker, "Deploy EPP inside Kubernetes/Docker container instead of a local host process")
 	fs.BoolVar(&opts.skipGateway, "skip-gateway", false, "Skip Envoy AI Gateway deployment check (default: false)")
+	fs.BoolVar(&opts.force, "force", false, "Force rebuild and redeployment even if components are already running and available")
 	fs.StringVar(&opts.oscarEndpoint, "oscar-endpoint", envOrDefault("OSCAR_ENDPOINT", defaultEndpoint), "OSCAR REST endpoint URL")
 	fs.StringVar(&opts.oscarCluster, "oscar-cluster", envOrDefault("OSCAR_CLUSTER_ID", defaultCluster), "OSCAR cluster ID in configuration")
 	fs.StringVar(&opts.modelName, "model", envOrDefault("EPP_MODEL_NAME", defaultModel), "Target LLM model name registered in OSCAR")
@@ -137,8 +141,23 @@ func handleInit(args []string) {
 
 	repoRoot := findRepoRoot()
 
-	// 1. Validate OSCAR connectivity
-	logStep("1. Validating OSCAR Control Plane connectivity")
+	// 1. Pre-flight check: Kubernetes cluster connectivity with auto-retry
+	logStep("1. Verifying Kubernetes Cluster connectivity")
+	k8sChecker := k8s.NewDefaultClusterChecker()
+	k8sCtx, cancelK8s := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancelK8s()
+
+	k8sStatus := k8sChecker.CheckReadiness(k8sCtx, 15, 2*time.Second, func(attempt, max int, wait time.Duration) {
+		logWarn(fmt.Sprintf("Kubernetes API server not responding yet (attempt %d/%d). Waiting %v...", attempt, max, wait))
+	})
+	if !k8sStatus.Ready {
+		logErr(k8sStatus.Error.Error())
+		os.Exit(1)
+	}
+	logInfo(fmt.Sprintf("Connected to Kubernetes: %s", k8sStatus.EndpointInfo))
+
+	// 2. Validate OSCAR connectivity
+	logStep("2. Validating OSCAR Control Plane connectivity")
 	settings := config.Settings{
 		OscarEndpoint:  opts.oscarEndpoint,
 		OscarClusterID: opts.oscarCluster,
@@ -162,11 +181,14 @@ func handleInit(args []string) {
 		logWarn(fmt.Sprintf("OSCAR check note: %s (proceeding with gateway deployment...)", clusterInfo.Error))
 	}
 
-	// 2. Deploy/Verify Envoy AI Gateway
+	// 3. Deploy/Verify Envoy AI Gateway
 	if !opts.skipGateway {
-		logStep("2. Ensuring Envoy Gateway & Envoy AI Gateway are deployed")
+		logStep("3. Ensuring Envoy Gateway & Envoy AI Gateway are deployed")
 		gatewayScript := filepath.Join(repoRoot, "scripts", "production", "deploy-gateway.sh")
-		if err := runScript(gatewayScript); err != nil {
+		env := map[string]string{
+			"FORCE": strconv.FormatBool(opts.force),
+		}
+		if err := runScriptWithEnv(gatewayScript, env); err != nil {
 			logErr(fmt.Sprintf("Failed to deploy Envoy AI Gateway: %v", err))
 			os.Exit(1)
 		}
@@ -174,41 +196,47 @@ func handleInit(args []string) {
 		logInfo("Skipping Gateway deployment as requested (--skip-gateway).")
 	}
 
-	// 3. Deploy EPP based on selected mode (Docker container vs Host direct process)
+	// 4. Deploy EPP based on selected mode (Docker container vs Host direct process)
 	if opts.docker {
-		logStep("3. Deploying EPP in Container Mode (Kubernetes Pod)")
+		logStep("4. Deploying EPP in Container Mode (Kubernetes Pod)")
 		deployEppScript := filepath.Join(repoRoot, "scripts", "production", "deploy-epp.sh")
 		env := map[string]string{
 			"NAMESPACE":        opts.namespace,
 			"MODEL_NAME":       opts.modelName,
 			"OSCAR_ENDPOINT":   opts.oscarEndpoint,
 			"OSCAR_CLUSTER_ID": opts.oscarCluster,
+			"FORCE":            strconv.FormatBool(opts.force),
 		}
 		if err := runScriptWithEnv(deployEppScript, env); err != nil {
 			logErr(fmt.Sprintf("Failed to deploy EPP container: %v", err))
 			os.Exit(1)
 		}
 
-		// 4. Attach EnvoyExtensionPolicy (Patrón B: ext_proc gRPC filter)
-		logStep("4. Attaching EnvoyExtensionPolicy (Patrón B: ext_proc gRPC)")
+		// 5. Attach EnvoyExtensionPolicy (ext_proc gRPC filter)
+		logStep("5. Attaching EnvoyExtensionPolicy (ext_proc gRPC)")
 		extPolicyScript := filepath.Join(repoRoot, "scripts", "production", "deploy-extension-policy.sh")
-		if err := runScriptWithEnv(extPolicyScript, env); err != nil {
+		policyEnv := map[string]string{
+			"NAMESPACE": opts.namespace,
+			"FORCE":     strconv.FormatBool(opts.force),
+		}
+		if err := runScriptWithEnv(extPolicyScript, policyEnv); err != nil {
 			logErr(fmt.Sprintf("Failed to configure EnvoyExtensionPolicy: %v", err))
 			os.Exit(1)
 		}
 	} else {
-		logStep("3. Configuring Host Execution Mode for EPP")
+		logStep("4. Configuring Host Execution Mode for EPP")
 		logInfo("The EPP runs directly on the host machine.")
 		logInfo(fmt.Sprintf("Listen Addresses: gRPC ext_proc on :%d, HTTP verification on :%d", opts.grpcPort, opts.httpPort))
 		logInfo("To launch the EPP process on the host machine, run:")
 		fmt.Printf("\n   go -C src run ./cmd/epp --port %d\n\n", opts.httpPort)
 
 		// Also configure EnvoyExtensionPolicy so the Gateway is ready for the EPP
-		logStep("4. Ensuring EnvoyExtensionPolicy CRD is applied")
+		logStep("5. Ensuring EnvoyExtensionPolicy CRD is applied")
 		extPolicyScript := filepath.Join(repoRoot, "scripts", "production", "deploy-extension-policy.sh")
 		env := map[string]string{
 			"NAMESPACE":  opts.namespace,
 			"MODEL_NAME": opts.modelName,
+			"FORCE":      strconv.FormatBool(opts.force),
 		}
 		_ = runScriptWithEnv(extPolicyScript, env)
 	}
@@ -216,7 +244,7 @@ func handleInit(args []string) {
 	logStep("Initialization Completed Successfully")
 	fmt.Println("Summary:")
 	fmt.Printf("  ✓ Envoy AI Gateway is ready\n")
-	fmt.Printf("  ✓ Patrón B (EnvoyExtensionPolicy ext_proc on port %d) is active\n", opts.grpcPort)
+	fmt.Printf("  ✓ EnvoyExtensionPolicy ext_proc on port %d is active\n", opts.grpcPort)
 	if opts.docker {
 		fmt.Printf("  ✓ EPP is deployed as a Kubernetes Service in namespace '%s'\n", opts.namespace)
 	} else {

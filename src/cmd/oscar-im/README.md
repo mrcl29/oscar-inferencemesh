@@ -12,7 +12,7 @@ This package provides the central command-line interface tool (`oscar-im`) for o
 
 ### `init`
 
-Initializes and configures the Envoy AI Gateway, the Endpoint Picker, and the Patrón B `EnvoyExtensionPolicy` (`ext_proc` gRPC filter). Automatically pulls defaults and active cluster from persistent configuration (`~/.config/oscar-im/config.yaml`).
+Initializes and configures the Envoy AI Gateway, the Endpoint Picker, and the `EnvoyExtensionPolicy` (`ext_proc` gRPC filter). Automatically pulls defaults and active cluster from persistent configuration (`~/.config/oscar-im/config.yaml`).
 
 ```bash
 # Direct host mode (default): prepares the gateway and runs EPP on your machine
@@ -20,6 +20,12 @@ go -C src run ./cmd/oscar-im init
 
 # Container mode: builds Docker image, deploys to Kubernetes, and wires EnvoyExtensionPolicy
 go -C src run ./cmd/oscar-im init --docker
+
+# Idempotent execution (skips rebuilding if already Available):
+go -C src run ./cmd/oscar-im init
+
+# Force rebuild and redeployment if desired:
+go -C src run ./cmd/oscar-im init --docker --force
 
 # Override on the fly via flags
 go -C src run ./cmd/oscar-im init --oscar-endpoint="https://my-oscar.example.org" --model="my-llm"

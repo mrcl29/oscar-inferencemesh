@@ -28,6 +28,7 @@ DOCKERFILE="$REPO_ROOT/Dockerfile.epp"
 
 DELETE_MODE=false
 NO_BUILD=false
+FORCE="${FORCE:-false}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,12 +40,17 @@ while [[ $# -gt 0 ]]; do
             NO_BUILD=true
             shift
             ;;
+        --force)
+            FORCE=true
+            shift
+            ;;
         --help | -h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Builds and deploys the Endpoint Picker (EPP) container and Service in Kubernetes."
             echo ""
             echo "Options:"
+            echo "  --force             Force rebuild and redeployment even if EPP is already running"
             echo "  --delete, --clean   Remove EPP Deployment and Service from the cluster"
             echo "  --no-build          Skip docker build (use existing image)"
             echo "  --help, -h          Display this help message"
@@ -70,6 +76,12 @@ if [ "$DELETE_MODE" = true ]; then
     kubectl delete role oscar-inferencemesh-epp-role -n "$NAMESPACE" --ignore-not-found=true
     kubectl delete serviceaccount oscar-inferencemesh-epp -n "$NAMESPACE" --ignore-not-found=true
     log_info "EPP resources deleted successfully."
+    exit 0
+fi
+
+# Idempotency check: is the EPP deployment already running and available?
+if [ "$FORCE" = false ] && kubectl -n "$NAMESPACE" wait --for=condition=Available deployment/oscar-inferencemesh-epp --timeout=2s &> /dev/null; then
+    log_info "EPP deployment is already running and Available in namespace '$NAMESPACE'. Skipping rebuild and redeployment."
     exit 0
 fi
 
