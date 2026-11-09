@@ -22,7 +22,7 @@ flowchart TD
 
 | Directory                                                              | Purpose                                                                                                                     |
 | :--------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------- |
-| [`deploy/`](file:///home/marc/Projects/oscar-inferencemesh/deploy)     | Declarative Kubernetes manifests for EPP (`deploy/epp`) and Envoy policies (`deploy/gateways`).                             |
+| [`deploy/`](file:///home/marc/Projects/oscar-inferencemesh/deploy)     | Container build definitions (`Dockerfile.epp`) and packaging artifacts.                                                     |
 | [`scripts/`](file:///home/marc/Projects/oscar-inferencemesh/scripts)   | Automation scripts for production deployment (`scripts/production`) and local development (`scripts/development`).          |
 | [`src/`](file:///home/marc/Projects/oscar-inferencemesh/src)           | Go source code implementing `oscar-im` CLI, EPP gRPC daemon, Clean Architecture domain models, and infrastructure adapters. |
 | [`examples/`](file:///home/marc/Projects/oscar-inferencemesh/examples) | Sample scripts and curl requests to test inference.                                                                         |

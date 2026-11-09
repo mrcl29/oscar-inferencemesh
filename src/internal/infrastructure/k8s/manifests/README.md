@@ -1,12 +1,10 @@
 # Embedded Kubernetes Manifests (`src/internal/infrastructure/k8s/manifests`)
 
-This package embeds the declarative Kubernetes manifests directly into the `oscar-im` Go binary using Go standard library's `//go:embed`.
+This package serves as the **Single Source of Truth (SSOT)** for all Kubernetes manifests in the repository, embedding them directly into the `oscar-im` Go binary using Go standard library's `//go:embed` while also providing the canonical manifests for deployment scripts.
 
 ## Purpose & Architecture
 
-In earlier prototype phases, the CLI executed local bash scripts that relied on relative paths (`deploy/epp/epp-deployment.yaml` and `deploy/gateways/envoy-extension-policy.yaml`) within a git checkout.
-
-To make `oscar-im` a true **standalone binary**:
+To make `oscar-im` a true **standalone binary** while avoiding configuration drift across the repository:
 
 1. All baseline deployment templates are embedded at compile time via `//go:embed *.yaml`.
 2. Template variables (`${NAMESPACE}`, `${MODEL_NAME}`, etc.) are rendered in-memory using `manifests.RenderManifest()`.

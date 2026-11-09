@@ -23,8 +23,8 @@ export OSCAR_ENDPOINT="${OSCAR_ENDPOINT:-https://localhost.direct}"
 export OSCAR_CLUSTER_ID="${OSCAR_CLUSTER_ID:-local}"
 export OSCAR_VERIFY_SSL="${OSCAR_VERIFY_SSL:-false}"
 
-EPP_YAML="$REPO_ROOT/deploy/epp/epp-deployment.yaml"
-DOCKERFILE="$REPO_ROOT/Dockerfile.epp"
+EPP_YAML="$REPO_ROOT/src/internal/infrastructure/k8s/manifests/epp-deployment.yaml"
+DOCKERFILE="$REPO_ROOT/deploy/Dockerfile.epp"
 
 DELETE_MODE=false
 NO_BUILD=false

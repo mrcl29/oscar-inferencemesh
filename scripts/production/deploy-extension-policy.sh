@@ -22,7 +22,7 @@ export EPP_SERVICE_NAME="${EPP_SERVICE_NAME:-oscar-inferencemesh-epp}"
 export EPP_GRPC_PORT="${EPP_GRPC_PORT:-9002}"
 export EXTENSION_POLICY_NAME="${EXTENSION_POLICY_NAME:-envoy-ai-gateway-epp-ext-proc}"
 
-POLICY_YAML="$REPO_ROOT/deploy/gateways/envoy-extension-policy.yaml"
+POLICY_YAML="$REPO_ROOT/src/internal/infrastructure/k8s/manifests/envoy-extension-policy.yaml"
 
 DELETE_MODE=false
 FORCE="${FORCE:-false}"
