@@ -30,11 +30,25 @@ OSCAR-IM v` + cliVersion + "\n"
 type initOptions struct {
 	docker        bool
 	skipGateway   bool
+	keepGateway   bool
 	force         bool
 	oscarEndpoint string
 	oscarCluster  string
 	modelName     string
 	namespace     string
+	httpPort      int
+	grpcPort      int
+}
+
+type removeOptions struct {
+	keepGateway   bool
+	skipGateway   bool
+	namespace     string
+	modelName     string
+	docker        bool
+	force         bool
+	oscarEndpoint string
+	oscarCluster  string
 	httpPort      int
 	grpcPort      int
 }
@@ -48,7 +62,11 @@ func main() {
 	command := os.Args[1]
 	switch command {
 	case "init":
-		handleInit(os.Args[2:])
+		handleInit(os.Args[2:], false)
+	case "remove":
+		handleRemove(os.Args[2:], false)
+	case "restart":
+		handleRestart(os.Args[2:])
 	case "config":
 		handleConfig(os.Args[2:])
 	case "version", "--version", "-v":
@@ -67,7 +85,9 @@ func printUsage() {
 	fmt.Println("Usage: oscar-im <command> [options]")
 	fmt.Println()
 	fmt.Println("Available Commands:")
-	fmt.Println("  init       Initialize and deploy the Envoy AI Gateway, EPP, and ext_proc filter")
+	fmt.Println("  init       Initialize and deploy Envoy AI Gateway, EPP, and ext_proc filter")
+	fmt.Println("  remove     Stop and remove deployed components (EPP, EnvoyExtensionPolicy, Gateways)")
+	fmt.Println("  restart    Restart the mesh infrastructure (remove followed by init)")
 	fmt.Println("  config     View and edit persistent configuration (~/.config/oscar-im/config.yaml)")
 	fmt.Println("  version    Display the CLI version")
 	fmt.Println("  help       Show help information")
@@ -82,7 +102,7 @@ func handleConfig(args []string) {
 	}
 }
 
-func handleInit(args []string) {
+func handleInit(args []string, isRestart bool) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 
 	fileCfg, _ := config.LoadOrCreateFileConfig("")
@@ -119,6 +139,7 @@ func handleInit(args []string) {
 	opts := initOptions{}
 	fs.BoolVar(&opts.docker, "docker", defaultDocker, "Deploy EPP inside Kubernetes/Docker container instead of a local host process")
 	fs.BoolVar(&opts.skipGateway, "skip-gateway", false, "Skip Envoy AI Gateway deployment check (default: false)")
+	fs.BoolVar(&opts.keepGateway, "keep-gateway", false, "Alias for --skip-gateway (keep Envoy Gateway intact)")
 	fs.BoolVar(&opts.force, "force", false, "Force rebuild and redeployment even if components are already running and available")
 	fs.StringVar(&opts.oscarEndpoint, "oscar-endpoint", envOrDefault("OSCAR_ENDPOINT", defaultEndpoint), "OSCAR REST endpoint URL")
 	fs.StringVar(&opts.oscarCluster, "oscar-cluster", envOrDefault("OSCAR_CLUSTER_ID", defaultCluster), "OSCAR cluster ID in configuration")
@@ -128,8 +149,13 @@ func handleInit(args []string) {
 	fs.IntVar(&opts.grpcPort, "grpc-port", defaultGRPCPort, "EPP gRPC ext_proc server port")
 
 	_ = fs.Parse(args)
+	if opts.keepGateway {
+		opts.skipGateway = true
+	}
 
-	fmt.Print(banner)
+	if !isRestart {
+		fmt.Print(banner)
+	}
 	fmt.Println("===> Initializing OSCAR-IM...")
 	fmt.Printf("  - Deployment Mode:    %s\n", deploymentModeString(opts.docker))
 	fmt.Printf("  - Model Target:       %s\n", opts.modelName)
@@ -313,6 +339,152 @@ func handleInit(args []string) {
 	fmt.Printf("  ✓ Ready to process model '%s'\n\n", opts.modelName)
 }
 
+func handleRestart(args []string) {
+	fmt.Print(banner)
+	fmt.Println("===> Restarting OSCAR-IM (remove + init)...")
+	fmt.Println()
+
+	handleRemove(args, true)
+	handleInit(args, true)
+}
+
+func handleRemove(args []string, isRestart bool) {
+	fs := flag.NewFlagSet("remove", flag.ExitOnError)
+
+	fileCfg, _ := config.LoadOrCreateFileConfig("")
+	defaultNamespace := "oscar-svc"
+	defaultModel := "qwen2-5-05b-instruct"
+
+	if fileCfg != nil {
+		if fileCfg.Defaults.Namespace != "" {
+			defaultNamespace = fileCfg.Defaults.Namespace
+		}
+		if fileCfg.Defaults.Model != "" {
+			defaultModel = fileCfg.Defaults.Model
+		}
+	}
+
+	opts := removeOptions{}
+	fs.BoolVar(&opts.keepGateway, "keep-gateway", false, "Keep Envoy Gateway and Envoy AI Gateway intact; only remove EPP and ExtensionPolicy")
+	fs.BoolVar(&opts.skipGateway, "skip-gateway", false, "Alias for --keep-gateway")
+	fs.StringVar(&opts.namespace, "namespace", envOrDefault("EPP_NAMESPACE", defaultNamespace), "Target Kubernetes namespace")
+	fs.StringVar(&opts.modelName, "model", envOrDefault("EPP_MODEL_NAME", defaultModel), "Target LLM model name")
+
+	// Passthrough flags from init / restart
+	fs.BoolVar(&opts.docker, "docker", false, "Ignored by remove (passed to init during restart)")
+	fs.BoolVar(&opts.force, "force", false, "Ignored by remove (passed to init during restart)")
+	fs.StringVar(&opts.oscarEndpoint, "oscar-endpoint", "", "Ignored by remove")
+	fs.StringVar(&opts.oscarCluster, "oscar-cluster", "", "Ignored by remove")
+	fs.IntVar(&opts.httpPort, "http-port", 9091, "Ignored by remove")
+	fs.IntVar(&opts.grpcPort, "grpc-port", 9002, "Ignored by remove")
+
+	_ = fs.Parse(args)
+	if opts.skipGateway {
+		opts.keepGateway = true
+	}
+
+	if !isRestart {
+		fmt.Print(banner)
+	}
+	fmt.Println("===> Removing OSCAR-IM...")
+	fmt.Printf("  - Namespace:    %s\n", opts.namespace)
+	fmt.Printf("  - Keep Gateway: %v\n", opts.keepGateway)
+	fmt.Println()
+
+	repoRoot := findRepoRoot()
+	deployer := k8s.NewDefaultKubeDeployer()
+
+	// 1. Pre-flight check: Kubernetes cluster connectivity with auto-retry
+	logStep("1. Verifying Kubernetes Cluster connectivity")
+	k8sChecker := k8s.NewDefaultClusterChecker()
+	k8sCtx, cancelK8s := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelK8s()
+
+	k8sStatus := k8sChecker.CheckReadiness(k8sCtx, 5, 2*time.Second, func(attempt, max int, wait time.Duration) {
+		logWarn(fmt.Sprintf("Kubernetes API server not responding yet (attempt %d/%d). Waiting %v...", attempt, max, wait))
+	})
+	if !k8sStatus.Ready {
+		logErr(k8sStatus.Error.Error())
+		os.Exit(1)
+	}
+	logInfo(fmt.Sprintf("Connected to Kubernetes: %s", k8sStatus.EndpointInfo))
+
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancelCleanup()
+
+	// 2. Remove EnvoyExtensionPolicy (ext_proc gRPC filter)
+	logStep("2. Removing EnvoyExtensionPolicy (ext_proc gRPC filter)")
+	extPolicyScript := filepath.Join(repoRoot, "scripts", "production", "deploy-extension-policy.sh")
+	if fileExists(extPolicyScript) {
+		policyEnv := map[string]string{
+			"NAMESPACE": opts.namespace,
+		}
+		if err := runScriptWithEnv(extPolicyScript, policyEnv, "--delete"); err != nil {
+			logWarn(fmt.Sprintf("Note during EnvoyExtensionPolicy script removal: %v", err))
+		}
+	} else {
+		logInfo("Running in standalone binary mode (removing EnvoyExtensionPolicy)...")
+		policyOpts := k8s.ExtensionPolicyOptions{
+			Namespace:           opts.namespace,
+			ExtensionPolicyName: "envoy-ai-gateway-epp-ext-proc",
+		}
+		if err := deployer.RemoveExtensionPolicy(cleanupCtx, policyOpts); err != nil {
+			logWarn(fmt.Sprintf("Note during EnvoyExtensionPolicy removal: %v", err))
+		}
+	}
+	logInfo("EnvoyExtensionPolicy removed.")
+
+	// 3. Remove EPP Deployment & Service
+	logStep("3. Removing EPP (Deployment, Service, RBAC)")
+	deployEppScript := filepath.Join(repoRoot, "scripts", "production", "deploy-epp.sh")
+	if fileExists(deployEppScript) {
+		env := map[string]string{
+			"NAMESPACE": opts.namespace,
+		}
+		if err := runScriptWithEnv(deployEppScript, env, "--delete"); err != nil {
+			logWarn(fmt.Sprintf("Note during EPP script removal: %v", err))
+		}
+	} else {
+		logInfo("Running in standalone binary mode (removing EPP resources)...")
+		eppOpts := k8s.EPPDeployOptions{
+			Namespace: opts.namespace,
+		}
+		if err := deployer.RemoveEPP(cleanupCtx, eppOpts); err != nil {
+			logWarn(fmt.Sprintf("Note during EPP removal: %v", err))
+		}
+	}
+	logInfo("EPP resources removed.")
+
+	// 4. Remove Gateways (if !keepGateway)
+	if !opts.keepGateway {
+		logStep("4. Uninstalling Envoy AI Gateway & Envoy Gateway")
+		gatewayScript := filepath.Join(repoRoot, "scripts", "production", "deploy-gateway.sh")
+		if fileExists(gatewayScript) {
+			if err := runScriptWithEnv(gatewayScript, nil, "--uninstall"); err != nil {
+				logWarn(fmt.Sprintf("Note during Gateway script uninstallation: %v", err))
+			}
+		} else {
+			logInfo("Running in standalone binary mode (uninstalling Envoy Gateways)...")
+			if err := deployer.RemoveGateway(cleanupCtx); err != nil {
+				logWarn(fmt.Sprintf("Note during Gateway removal: %v", err))
+			}
+		}
+		logInfo("Envoy Gateway and Envoy AI Gateway uninstalled.")
+	} else {
+		logInfo("Keeping Envoy Gateway and Envoy AI Gateway intact (--keep-gateway).")
+	}
+
+	logStep("Removal Completed Successfully")
+	fmt.Println("Summary:")
+	fmt.Printf("  ✓ EnvoyExtensionPolicy removed\n")
+	fmt.Printf("  ✓ EPP resources removed from namespace '%s'\n", opts.namespace)
+	if !opts.keepGateway {
+		fmt.Printf("  ✓ Envoy AI Gateway and Envoy Gateway uninstalled\n\n")
+	} else {
+		fmt.Printf("  ✓ Envoy Gateway retained\n\n")
+	}
+}
+
 func deploymentModeString(docker bool) string {
 	if docker {
 		return "Docker Container / Kubernetes Pod (--docker)"
@@ -324,8 +496,9 @@ func runScript(scriptPath string) error {
 	return runScriptWithEnv(scriptPath, nil)
 }
 
-func runScriptWithEnv(scriptPath string, extraEnv map[string]string) error {
-	cmd := exec.Command("/usr/bin/env", "bash", scriptPath)
+func runScriptWithEnv(scriptPath string, extraEnv map[string]string, extraArgs ...string) error {
+	cmdArgs := append([]string{"bash", scriptPath}, extraArgs...)
+	cmd := exec.Command("/usr/bin/env", cmdArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()

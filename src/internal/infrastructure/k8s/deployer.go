@@ -34,11 +34,14 @@ type ExtensionPolicyOptions struct {
 	Force               bool
 }
 
-// Deployer defines the contract for deploying and configuring mesh components.
+// Deployer defines the contract for deploying, updating, and removing mesh components.
 type Deployer interface {
 	DeployGateway(ctx context.Context, force bool) error
 	DeployEPP(ctx context.Context, opts EPPDeployOptions) error
 	DeployExtensionPolicy(ctx context.Context, opts ExtensionPolicyOptions) error
+	RemoveGateway(ctx context.Context) error
+	RemoveEPP(ctx context.Context, opts EPPDeployOptions) error
+	RemoveExtensionPolicy(ctx context.Context, opts ExtensionPolicyOptions) error
 }
 
 // CommandWithStdinRunner executes an external CLI command with optional standard input.
@@ -228,6 +231,78 @@ func (d *DefaultKubeDeployer) DeployExtensionPolicy(ctx context.Context, opts Ex
 	if err != nil {
 		return fmt.Errorf("failed to apply EnvoyExtensionPolicy manifest: %w (%s)", err, string(out))
 	}
+
+	return nil
+}
+
+// RemoveExtensionPolicy deletes the EnvoyExtensionPolicy resource from Kubernetes.
+func (d *DefaultKubeDeployer) RemoveExtensionPolicy(ctx context.Context, opts ExtensionPolicyOptions) error {
+	ns := opts.Namespace
+	if ns == "" {
+		ns = "oscar-svc"
+	}
+	policyName := opts.ExtensionPolicyName
+	if policyName == "" {
+		policyName = "envoy-ai-gateway-epp-ext-proc"
+	}
+
+	out, err := d.CommandRunner(ctx, nil, "kubectl", "delete", "envoyextensionpolicy", policyName,
+		"-n", ns, "--ignore-not-found=true")
+	if err != nil {
+		return fmt.Errorf("failed to delete EnvoyExtensionPolicy: %w (%s)", err, string(out))
+	}
+	return nil
+}
+
+// RemoveEPP deletes the EPP Deployment, Service, and RBAC resources from Kubernetes.
+func (d *DefaultKubeDeployer) RemoveEPP(ctx context.Context, opts EPPDeployOptions) error {
+	ns := opts.Namespace
+	if ns == "" {
+		ns = "oscar-svc"
+	}
+
+	resources := []struct {
+		kind string
+		name string
+	}{
+		{"deployment", "oscar-inferencemesh-epp"},
+		{"service", "oscar-inferencemesh-epp"},
+		{"rolebinding", "oscar-inferencemesh-epp-rolebinding"},
+		{"role", "oscar-inferencemesh-epp-role"},
+		{"serviceaccount", "oscar-inferencemesh-epp"},
+	}
+
+	for _, res := range resources {
+		out, err := d.CommandRunner(ctx, nil, "kubectl", "delete", res.kind, res.name,
+			"-n", ns, "--ignore-not-found=true")
+		if err != nil {
+			return fmt.Errorf("failed to delete %s %s: %w (%s)", res.kind, res.name, err, string(out))
+		}
+	}
+	return nil
+}
+
+// RemoveGateway uninstalls Envoy Gateway and Envoy AI Gateway Helm releases and removes their namespaces.
+func (d *DefaultKubeDeployer) RemoveGateway(ctx context.Context) error {
+	if _, err := exec.LookPath("helm"); err == nil {
+		releases := []struct {
+			name      string
+			namespace string
+		}{
+			{"aieg", "envoy-ai-gateway-system"},
+			{"aieg-crd", "envoy-ai-gateway-system"},
+			{"eg", "envoy-gateway-system"},
+		}
+		for _, rel := range releases {
+			statusOut, statusErr := d.CommandRunner(ctx, nil, "helm", "status", rel.name, "-n", rel.namespace)
+			if statusErr == nil && !strings.Contains(strings.ToLower(string(statusOut)), "not found") {
+				_, _ = d.CommandRunner(ctx, nil, "helm", "uninstall", rel.name, "-n", rel.namespace)
+			}
+		}
+	}
+
+	_, _ = d.CommandRunner(ctx, nil, "kubectl", "delete", "namespace", "envoy-ai-gateway-system", "--ignore-not-found=true")
+	_, _ = d.CommandRunner(ctx, nil, "kubectl", "delete", "namespace", "envoy-gateway-system", "--ignore-not-found=true")
 
 	return nil
 }

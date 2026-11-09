@@ -57,3 +57,13 @@ go build -C src -o bin/oscar-im ./cmd/oscar-im
 ```bash
 ./examples/requests/curl-inference.sh "¿Qué es la arquitectura hexagonal?"
 ```
+
+### 5. Restart or Tear Down
+
+```bash
+# Restart the mesh (remove followed by init)
+./src/bin/oscar-im restart --docker --keep-gateway
+
+# Remove all deployed components
+./src/bin/oscar-im remove
+```

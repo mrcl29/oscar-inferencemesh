@@ -4,9 +4,9 @@ This package provides the central command-line interface tool (`oscar-im`) for o
 
 ## Files
 
-| File                                                                                 | Type      | Description                                                                                                                                                                     |
-| :----------------------------------------------------------------------------------- | :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`main.go`](file:///home/marc/Projects/oscar-inferencemesh/src/cmd/oscar-im/main.go) | Go Source | CLI entrypoint implementing the `init` and `config` commands (with host direct process vs `--docker` container deployment modes), health checks, and modular script delegation. |
+| File                                                                                 | Type      | Description                                                                                                                                             |
+| :----------------------------------------------------------------------------------- | :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`main.go`](file:///home/marc/Projects/oscar-inferencemesh/src/cmd/oscar-im/main.go) | Go Source | CLI entrypoint implementing `init`, `remove`, `restart`, and `config` commands, supporting standalone embedded execution and modular script delegation. |
 
 ## Commands
 
@@ -16,19 +16,43 @@ Initializes and configures the Envoy AI Gateway, the Endpoint Picker, and the `E
 
 ```bash
 # Direct host mode (default): prepares the gateway and runs EPP on your machine
-go -C src run ./cmd/oscar-im init
+oscar-im init
 
 # Container mode: builds Docker image, deploys to Kubernetes, and wires EnvoyExtensionPolicy
-go -C src run ./cmd/oscar-im init --docker
+oscar-im init --docker
 
 # Idempotent execution (skips rebuilding if already Available):
-go -C src run ./cmd/oscar-im init
+oscar-im init
 
 # Force rebuild and redeployment if desired:
-go -C src run ./cmd/oscar-im init --docker --force
+oscar-im init --docker --force
 
-# Override on the fly via flags
-go -C src run ./cmd/oscar-im init --oscar-endpoint="https://my-oscar.example.org" --model="my-llm"
+# Retain gateway / skip gateway deployment:
+oscar-im init --docker --skip-gateway
+```
+
+### `remove`
+
+Stops and removes deployed mesh components (`EnvoyExtensionPolicy`, `EPP` Deployment/Service/RBAC, and `Envoy Gateway`/`Envoy AI Gateway` releases).
+
+```bash
+# Remove everything (EPP, EnvoyExtensionPolicy, and Envoy AI Gateway Helm releases)
+oscar-im remove
+
+# Keep Envoy Gateway intact, only removing EPP and EnvoyExtensionPolicy
+oscar-im remove --keep-gateway
+```
+
+### `restart`
+
+Performs a full restart of the mesh infrastructure by running `remove` followed immediately by `init`.
+
+```bash
+# Full restart (re-deploys everything from scratch)
+oscar-im restart --docker
+
+# Fast restart (preserves Envoy Gateway, only bouncing EPP and EnvoyExtensionPolicy)
+oscar-im restart --docker --keep-gateway
 ```
 
 ### `config`
