@@ -20,6 +20,8 @@ func NewNoOpAutoscalerPolicy() *NoOpAutoscalerPolicy {
 }
 
 // Evaluate inspects pool metrics and emits a verifiable NO_OP scaling decision.
+// TODO(FG-05): Add a separate active policy using configured KV/queue thresholds and
+// replica bounds, with hysteresis/cooldown and missing-metric tests; retain this no-op baseline.
 func (p *NoOpAutoscalerPolicy) Evaluate(
 	serviceName string,
 	endpoints []domain.WorkerEndpoint,
@@ -105,6 +107,8 @@ func NewAutoscalerOrchestrator(
 
 // ReconcileOnce runs a single autoscaling evaluation and OSCAR synchronization cycle.
 func (o *AutoscalerOrchestrator) ReconcileOnce(ctx context.Context) domain.ScalingDecision {
+	// TODO(FG-05): Surface discovery and apply failures rather than recording successful-looking decisions;
+	// incorporate lifecycle/cold-start observations before retrying provisioning (see TODO.md).
 	endpoints, _ := o.discovery.ListEndpoints(ctx, o.serviceName)
 	metricsMap := o.metrics.CollectAll(ctx, endpoints)
 	decision := o.policy.Evaluate(o.serviceName, endpoints, metricsMap)

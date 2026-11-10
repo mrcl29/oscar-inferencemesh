@@ -58,6 +58,8 @@ func NewServer(
 
 // BuildVerificationReport executes a single autoscaler reconciliation and builds a diagnostic report.
 func (s *Server) BuildVerificationReport(ctx context.Context) VerificationReport {
+	// TODO(FG-07): Separate observation from reconciliation before scaling becomes active;
+	// derive status from dependency/control-loop failures instead of unconditional "ok".
 	reconciliation := s.autoscaler.ReconcileOnce(ctx)
 	return VerificationReport{
 		Component:            "oscar-inferencemesh-epp",
@@ -152,6 +154,8 @@ func (s *Server) Handler() http.Handler {
 
 // ListenAndServe starts both the HTTP verification server and the gRPC ext_proc server.
 func (s *Server) ListenAndServe() error {
+	// TODO(FG-07): Start an independently scheduled, cancellable reconciliation loop;
+	// verification requests must not be the controller clock (see application/TODO.md).
 	grpcServer, lis, err := StartGrpcServer(s.settings, s.picker)
 	if err != nil {
 		return fmt.Errorf("failed to initialize gRPC ext_proc server: %w", err)

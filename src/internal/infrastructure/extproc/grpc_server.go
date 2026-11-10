@@ -37,6 +37,9 @@ func NewGrpcExtProcServer(
 }
 
 // Process implements the bidirectional streaming RPC for Envoy ext_proc filter.
+// TODO(RB-02): Validate negotiated processing phases against the gateway policy;
+// reply with the matching body/trailer response type rather than an empty envelope,
+// and test stream cancellation and unexpected phases.
 func (s *GrpcExtProcServer) Process(srv extprocv3.ExternalProcessor_ProcessServer) error {
 	ctx := srv.Context()
 	log.Printf("[EPP-gRPC] New ext_proc bidirectional stream connected from Envoy")
@@ -90,6 +93,8 @@ func (s *GrpcExtProcServer) handleRequestHeaders(
 	headersMap := make(map[string]string)
 	if reqHeaders != nil && reqHeaders.Headers != nil {
 		for _, h := range reqHeaders.Headers.Headers {
+			// TODO(RB-02): Handle negotiated raw header bytes as well as string values;
+			// test request decoding and mutation encoding with the deployed Envoy version.
 			headersMap[h.Key] = h.Value
 		}
 	}
@@ -118,6 +123,9 @@ func (s *GrpcExtProcServer) handleRequestHeaders(
 	}
 
 	decision := s.picker.ProcessRequest(ctx, reqCtx)
+	// TODO(FG-02): Translate SelectedEndpoint into an effective, supported Envoy routing
+	// mechanism; current mutations carry diagnostics only. Prove the selected worker
+	// receives traffic end to end, without assuming an arbitrary header changes routing.
 
 	var setHeaders []*corev3.HeaderValueOption
 	for k, v := range decision.ResponseHeaders {

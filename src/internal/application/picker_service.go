@@ -23,6 +23,8 @@ func NewPassThroughSelector() *PassThroughSelector {
 }
 
 // SelectEndpoint records candidate state and returns a pass-through routing decision.
+// TODO(FG-01): Add active selection alongside this baseline using ready workers and valid,
+// fresh telemetry, deterministic ties, and explicit empty/unhealthy-pool behavior.
 func (s *PassThroughSelector) SelectEndpoint(
 	reqCtx domain.InferenceRequestContext,
 	endpoints []domain.WorkerEndpoint,
@@ -96,6 +98,7 @@ func (s *EndpointPickerService) ProcessRequest(
 	ctx context.Context,
 	reqCtx domain.InferenceRequestContext,
 ) domain.RoutingDecision {
+	// TODO(FG-01): Preserve discovery failures in the routing outcome instead of silently treating them as an empty pool.
 	endpoints, _ := s.discovery.ListEndpoints(ctx, reqCtx.Model)
 	metricsMap := s.metrics.CollectAll(ctx, endpoints)
 	decision := s.selector.SelectEndpoint(reqCtx, endpoints, metricsMap)

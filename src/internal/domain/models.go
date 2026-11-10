@@ -31,6 +31,8 @@ const (
 )
 
 // WorkerEndpoint represents a discoverable vLLM worker replica in the inference pool.
+// TODO(FG-08): Add explicit cluster identity before federating discovery; endpoint and
+// metric keys must not collide for equal pod names in different clusters.
 type WorkerEndpoint struct {
 	Name      string            `json:"name"`
 	Address   string            `json:"address"`

@@ -37,6 +37,8 @@ func (a *ControlPlaneAdapter) GetClusterInfo(ctx context.Context) domain.OscarCl
 	cmdCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 
+	// TODO(FG-06): Bind CLI execution explicitly to the configured cluster and verify the
+	// reported identity; ambient CLI defaults need not match settings.OscarClusterID/Endpoint.
 	cmd := exec.CommandContext(cmdCtx, cliPath, "service", "list")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -114,6 +116,8 @@ func (a *ControlPlaneAdapter) ApplyScalingDecision(
 	if decision.Action == domain.ScalingActionNoOp {
 		return nil
 	}
-	// Future implementation hook: invoke `oscar-cli service apply` or PUT /system/services.
+	// TODO(FG-06): Apply non-no-op decisions through a verified OSCAR transport, with
+	// idempotency, explicit cluster targeting and observable failures; returning nil here performs no action.
+	// Choose the supported transport after validating its contract; both REST and CLI are not required.
 	return nil
 }

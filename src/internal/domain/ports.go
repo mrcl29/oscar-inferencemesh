@@ -5,6 +5,8 @@ package domain
 import "context"
 
 // EndpointDiscoveryPort discovers active vLLM worker endpoints in the Kubernetes cluster.
+// TODO(FG-08): Define cluster-scoped discovery results and partial-failure semantics
+// before multi-cluster aggregation; preserve single-cluster adapter ownership.
 type EndpointDiscoveryPort interface {
 	ListEndpoints(ctx context.Context, modelName string) ([]WorkerEndpoint, error)
 }
@@ -33,6 +35,8 @@ type AutoscalerPolicyPort interface {
 }
 
 // OscarClientPort interacts with the OSCAR serverless platform control plane.
+// TODO(FG-08): Define lifecycle observations needed to distinguish desired, pending,
+// model-loading, ready and failed workers before adding cold-start orchestration.
 type OscarClientPort interface {
 	GetClusterInfo(ctx context.Context) OscarClusterStatus
 	GetService(ctx context.Context, serviceName string) (*OscarServiceSummary, error)

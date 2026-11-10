@@ -32,6 +32,8 @@ func NewVllmPrometheusAdapter(settings config.Settings) *VllmPrometheusAdapter {
 }
 
 // CollectAll scrapes metrics for every candidate endpoint.
+// TODO(FG-04): Move repeated serial request-path scraping to bounded collection with
+// a freshness-aware snapshot; test cancellation, stale data, and unavailable workers.
 func (a *VllmPrometheusAdapter) CollectAll(
 	ctx context.Context,
 	endpoints []domain.WorkerEndpoint,
@@ -83,6 +85,10 @@ func unreachableSnapshot(endpointName string) domain.EndpointMetrics {
 }
 
 // ParsePrometheusText parses raw Prometheus exposition text into domain.EndpointMetrics.
+// TODO(FG-04): Validate required metric presence, finite values and scanner errors;
+// empty/malformed payloads must not look like healthy zero-load snapshots.
+// WaitingRequests counts requests, not queued tokens: obtain explicit token-backlog
+// telemetry before implementing a token-aware policy; do not infer it from this gauge.
 func ParsePrometheusText(endpointName, rawText string) domain.EndpointMetrics {
 	var kvCache float64
 	var waiting int

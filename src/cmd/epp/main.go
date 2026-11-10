@@ -24,6 +24,7 @@ func buildServer(settings config.Settings) *extproc.Server {
 	metricsCollector := metrics.NewVllmPrometheusAdapter(settings)
 	oscarClient := oscar.NewControlPlaneAdapter(settings)
 
+	// TODO(FG-01): Wire an active selection policy when implemented; retain explicit pass-through as the baseline.
 	selector := application.NewPassThroughSelector()
 	pickerService := application.NewEndpointPickerService(
 		discovery,
@@ -31,6 +32,7 @@ func buildServer(settings config.Settings) *extproc.Server {
 		selector,
 	)
 
+	// TODO(FG-05): Wire configured scaling thresholds and replica bounds into an active policy; keep no-op available.
 	autoscalerPolicy := application.NewNoOpAutoscalerPolicy()
 	autoscaler := application.NewAutoscalerOrchestrator(
 		settings.ModelName,
@@ -87,4 +89,3 @@ func main() {
 		log.Fatalf("[EPP] Server exited with error: %v", err)
 	}
 }
-

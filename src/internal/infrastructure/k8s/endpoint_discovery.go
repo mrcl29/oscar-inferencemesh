@@ -67,6 +67,8 @@ func (a *EndpointDiscoveryAdapter) ListEndpoints(
 	}
 
 	// 3. Fallback to default KServe Service FQDN
+	// TODO(FG-03): Distinguish service fallback from observed ready replicas and discovery failure;
+	// do not let this fabricated ready entry inflate autoscaler counts or hide zero-worker cold starts.
 	return []domain.WorkerEndpoint{
 		{
 			Name:      targetModel + "-default-svc",
@@ -97,11 +99,13 @@ func (a *EndpointDiscoveryAdapter) discoverViaInCluster(
 	req.Header.Set("Authorization", "Bearer "+string(tokenBytes))
 
 	tr := &http.Transport{
+		// TODO(RB-01): Trust the mounted service-account CA and verify the API server certificate instead of bypassing TLS verification.
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // Cluster internal CA
 	}
 	client := &http.Client{Transport: tr, Timeout: 3 * time.Second}
 
 	resp, err := client.Do(req)
+	// TODO(RB-01): Close any received response body on non-OK status too; the current early return skips cleanup.
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return nil
 	}
@@ -152,6 +156,8 @@ func (a *EndpointDiscoveryAdapter) parsePodsJSON(
 	var endpoints []domain.WorkerEndpoint
 	for _, item := range podList.Items {
 		podName := item.Metadata.Name
+		// TODO(FG-03): Match explicit workload/model labels rather than pod-name substrings;
+		// test similarly named models and non-worker pods.
 		if !strings.Contains(podName, modelName) || strings.Contains(podName, "router-scheduler") {
 			continue
 		}
@@ -167,6 +173,8 @@ func (a *EndpointDiscoveryAdapter) parsePodsJSON(
 			}
 		}
 
+		// TODO(FG-03): Exclude non-ready workers from routing candidates (or separate lifecycle observations);
+		// Running alone is insufficient, especially while the model is loading.
 		endpoints = append(endpoints, domain.WorkerEndpoint{
 			Name:      podName,
 			Address:   item.Status.PodIP,

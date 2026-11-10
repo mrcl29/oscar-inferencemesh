@@ -7,6 +7,8 @@ metadata:
     app.kubernetes.io/name: ${EXTENSION_POLICY_NAME}
     app.kubernetes.io/part-of: oscar-inferencemesh
 spec:
+  # TODO(FG-02): Validate rendered policy and negotiated phases against the deployed gateway;
+  # prove selected-worker routing and fail-open fallback with real requests, not diagnostic headers alone.
   targetRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway

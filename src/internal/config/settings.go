@@ -30,6 +30,9 @@ type Settings struct {
 // FromEnv loads EPP configuration with full hierarchical precedence:
 // Environment Variables > Persistent File (~/.config/inferencemesh/config.yaml) > Built-in Defaults.
 func FromEnv() Settings {
+	// TODO(RB-03): Validate final effective settings before startup: ports in 1..65535,
+	// positive finite scrape timeout, finite normalized KV threshold, nonnegative queue
+	// threshold and 0 <= MinReplicas <= MaxReplicas; numeric parsing alone allows invalid values.
 	// 1. Start with built-in defaults
 	model := "qwen2-5-05b-instruct"
 	namespace := "oscar-svc"

@@ -50,6 +50,9 @@ func (s *stubOscar) ApplyScalingDecision(_ context.Context, _ domain.ScalingDeci
 	return nil
 }
 
+// TODO(FG-09): Retain this baseline and add active-policy tests for readiness, missing/stale
+// metrics, discovery/apply errors, threshold boundaries, cooldown and cold-start transitions;
+// verify effective selected-worker routing in an integration test, not only diagnostic headers.
 func TestPassThroughPickerAndAutoscaler(t *testing.T) {
 	endpoints := []domain.WorkerEndpoint{
 		{
