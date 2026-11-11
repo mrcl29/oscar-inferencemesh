@@ -99,6 +99,8 @@ spec:
               value: "9091"
             - name: EPP_GRPC_PORT
               value: "9002"
+            - name: EPP_WORKER_WAIT_TIMEOUT_SEC
+              value: "${EPP_WORKER_WAIT_TIMEOUT_SEC}"
             - name: OSCAR_ENDPOINT
               value: "${OSCAR_ENDPOINT}"
             - name: OSCAR_CLUSTER_ID

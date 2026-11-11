@@ -66,20 +66,7 @@ func (a *EndpointDiscoveryAdapter) ListEndpoints(
 		return discovered, nil
 	}
 
-	// 3. Fallback to default KServe Service FQDN
-	// TODO(FG-03): Distinguish service fallback from observed ready replicas and discovery failure;
-	// do not let this fabricated ready entry inflate autoscaler counts or hide zero-worker cold starts.
-	return []domain.WorkerEndpoint{
-		{
-			Name:      targetModel + "-default-svc",
-			Address:   a.settings.DefaultBackendFQDN,
-			Port:      a.settings.DefaultBackendPort,
-			Namespace: a.settings.Namespace,
-			ModelName: targetModel,
-			Ready:     true,
-			Labels:    map[string]string{"source": "static-service-fallback"},
-		},
-	}, nil
+	return nil, nil
 }
 
 func (a *EndpointDiscoveryAdapter) discoverViaInCluster(

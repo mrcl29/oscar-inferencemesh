@@ -13,14 +13,15 @@ import (
 
 // EPPDeployOptions contains configuration settings for deploying the Endpoint Picker.
 type EPPDeployOptions struct {
-	Namespace        string
-	ModelName        string
-	EPPImage         string
-	OscarEndpoint    string
-	OscarClusterID   string
-	OscarVerifySSL   string
-	DiskManifestPath string
-	Force            bool
+	Namespace         string
+	ModelName         string
+	EPPImage          string
+	OscarEndpoint     string
+	OscarClusterID    string
+	OscarVerifySSL    string
+	WorkerWaitTimeout string
+	DiskManifestPath  string
+	Force             bool
 }
 
 // ExtensionPolicyOptions contains configuration for configuring the EnvoyExtensionPolicy ext_proc filter.
@@ -145,7 +146,11 @@ func (d *DefaultKubeDeployer) DeployEPP(ctx context.Context, opts EPPDeployOptio
 
 	// Idempotency check: is EPP already Available?
 	if !opts.Force && d.isDeploymentAvailable(ctx, ns, "oscar-inferencemesh-epp") {
-		return nil
+		out, err := d.CommandRunner(ctx, nil, "kubectl", "-n", ns, "get", "deployment", "oscar-inferencemesh-epp",
+			"-o", "jsonpath={.spec.template.spec.containers[?(@.name=='epp')].env[?(@.name=='EPP_WORKER_WAIT_TIMEOUT_SEC')].value}")
+		if err == nil && strings.TrimSpace(string(out)) == opts.WorkerWaitTimeout {
+			return nil
+		}
 	}
 
 	// Load manifest (disk override prioritizing, falling back to embedded FS)
@@ -155,12 +160,13 @@ func (d *DefaultKubeDeployer) DeployEPP(ctx context.Context, opts EPPDeployOptio
 	}
 
 	vars := map[string]string{
-		"NAMESPACE":        ns,
-		"MODEL_NAME":       opts.ModelName,
-		"EPP_IMAGE":        opts.EPPImage,
-		"OSCAR_ENDPOINT":   opts.OscarEndpoint,
-		"OSCAR_CLUSTER_ID": opts.OscarClusterID,
-		"OSCAR_VERIFY_SSL": opts.OscarVerifySSL,
+		"NAMESPACE":                   ns,
+		"MODEL_NAME":                  opts.ModelName,
+		"EPP_IMAGE":                   opts.EPPImage,
+		"OSCAR_ENDPOINT":              opts.OscarEndpoint,
+		"OSCAR_CLUSTER_ID":            opts.OscarClusterID,
+		"OSCAR_VERIFY_SSL":            opts.OscarVerifySSL,
+		"EPP_WORKER_WAIT_TIMEOUT_SEC": opts.WorkerWaitTimeout,
 	}
 	rendered := manifests.RenderManifest(rawYAML, vars)
 

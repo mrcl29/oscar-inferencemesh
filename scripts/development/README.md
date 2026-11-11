@@ -12,9 +12,18 @@ This directory contains automation scripts for provisioning local development cl
 | [`deploy-envoy-ai-gateway.sh`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/deploy-envoy-ai-gateway.sh)                                                                                               | Installs and manages the platform controllers and CRDs for Envoy Gateway and Envoy AI Gateway via Helm charts with Server-Side Apply conflict resolution. Also supports `--uninstall` / `--clean`.                                                                                                                                                                                            |
 | [`install-oscar-prereqs.sh`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/install-oscar-prereqs.sh)                                                                                                   | Detects system architecture and package managers (pacman, apt, dnf) to install prerequisite dependencies: Docker, kubectl (`v1.33.1`), Kind (`v0.27.0`), Helm 3, and `/etc/hosts` resolution for `localhost.direct`. Requires sudo.                                                                                                                                                           |
 | [`setup-oscar-cli.sh`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/setup-oscar-cli.sh)                                                                                                               | Downloads the latest `oscar-cli` binary, extracts cluster credentials dynamically from Kubernetes secrets/deployments, and registers the `local` OSCAR cluster.                                                                                                                                                                                                                               |
+| [`install-oscar-im.sh`](./install-oscar-im.sh)                                                                                                                                                                               | Builds the current Go CLI and installs `oscar-im` to `~/.local/bin`, adding that directory to the selected shell startup file once.                                                                                                                                                                                                                                                        |
 | [`utils/`](file:///home/marc/Projects/oscar-inferencemesh/scripts/development/utils)                                                                                                                                        | Shared utility modules for logging, FDL YAML manifest parsing, and Kind deployment patching.                                                                                                                                                                                                                                                                                                  |
 
 ## Workflow Examples
+
+### Install the `oscar-im` CLI from the Current Checkout
+
+```bash
+./scripts/development/install-oscar-im.sh
+# Source the printed profile, or open a new shell, then:
+oscar-im --help
+```
 
 ### 1. Initialize Complete Local Environment from Scratch
 

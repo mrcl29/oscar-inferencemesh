@@ -20,11 +20,12 @@ type ClusterConfig struct {
 
 // DefaultsConfig defines default parameters for EPP runtime and CLI initialization.
 type DefaultsConfig struct {
-	Namespace string `yaml:"namespace" json:"namespace"`
-	Model     string `yaml:"model" json:"model"`
-	HTTPPort  int    `yaml:"http_port" json:"http_port"`
-	GRPCPort  int    `yaml:"grpc_port" json:"grpc_port"`
-	Docker    bool   `yaml:"docker" json:"docker"`
+	Namespace         string `yaml:"namespace" json:"namespace"`
+	Model             string `yaml:"model" json:"model"`
+	HTTPPort          int    `yaml:"http_port" json:"http_port"`
+	GRPCPort          int    `yaml:"grpc_port" json:"grpc_port"`
+	Docker            bool   `yaml:"docker" json:"docker"`
+	WorkerWaitTimeout int    `yaml:"worker_wait_timeout_sec" json:"worker_wait_timeout_sec"`
 }
 
 // FileConfig models the complete persistent configuration file (~/.config/inferencemesh/config.yaml).
@@ -80,11 +81,12 @@ func DefaultFileConfig() *FileConfig {
 			},
 		},
 		Defaults: DefaultsConfig{
-			Namespace: "oscar-svc",
-			Model:     "qwen2-5-05b-instruct",
-			HTTPPort:  9091,
-			GRPCPort:  9002,
-			Docker:    false,
+			Namespace:         "oscar-svc",
+			Model:             "qwen2-5-05b-instruct",
+			HTTPPort:          9091,
+			GRPCPort:          9002,
+			Docker:            false,
+			WorkerWaitTimeout: 30,
 		},
 	}
 }

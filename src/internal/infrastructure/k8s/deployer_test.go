@@ -42,6 +42,9 @@ func TestDeployEPP_IdempotentSkip(t *testing.T) {
 	deployer := &DefaultKubeDeployer{
 		CommandRunner: func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
 			cmdStr := name + " " + strings.Join(args, " ")
+			if strings.Contains(cmdStr, "get deployment oscar-inferencemesh-epp") {
+				return []byte(""), nil
+			}
 			if strings.Contains(cmdStr, "wait --for=condition=Available") {
 				return []byte("deployment.apps/oscar-inferencemesh-epp condition met"), nil
 			}
@@ -64,6 +67,37 @@ func TestDeployEPP_IdempotentSkip(t *testing.T) {
 
 	if appliedStdin != nil {
 		t.Fatal("expected manifest not to be applied when already Available and Force=false")
+	}
+}
+
+func TestDeployEPP_AvailableDeploymentWithChangedWorkerWaitTimeoutRollsOut(t *testing.T) {
+	var applied bool
+	var rolledOut bool
+	deployer := &DefaultKubeDeployer{
+		CommandRunner: func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+			cmd := name + " " + strings.Join(args, " ")
+			switch {
+			case strings.Contains(cmd, "wait --for=condition=Available"):
+				return []byte("deployment available"), nil
+			case strings.Contains(cmd, "get deployment oscar-inferencemesh-epp"):
+				return []byte("30"), nil
+			case strings.Contains(cmd, "apply -f -"):
+				applied = true
+			case strings.Contains(cmd, "rollout status"):
+				rolledOut = true
+			}
+			return []byte("ok"), nil
+		},
+	}
+
+	err := deployer.DeployEPP(context.Background(), EPPDeployOptions{
+		Namespace: "oscar-svc", WorkerWaitTimeout: "45", Force: false,
+	})
+	if err != nil {
+		t.Fatalf("expected successful rollout, got: %v", err)
+	}
+	if !applied || !rolledOut {
+		t.Fatalf("expected changed timeout to apply and roll out; applied=%v rolledOut=%v", applied, rolledOut)
 	}
 }
 

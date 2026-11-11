@@ -22,6 +22,7 @@ export EPP_IMAGE="${EPP_IMAGE:-oscar-inferencemesh-epp:latest}"
 export OSCAR_ENDPOINT="${OSCAR_ENDPOINT:-https://localhost.direct}"
 export OSCAR_CLUSTER_ID="${OSCAR_CLUSTER_ID:-local}"
 export OSCAR_VERIFY_SSL="${OSCAR_VERIFY_SSL:-false}"
+export EPP_WORKER_WAIT_TIMEOUT_SEC="${EPP_WORKER_WAIT_TIMEOUT_SEC:-30}"
 
 EPP_YAML="$REPO_ROOT/src/internal/infrastructure/k8s/manifests/epp-deployment.yaml"
 DOCKERFILE="$REPO_ROOT/deploy/Dockerfile.epp"
@@ -80,7 +81,8 @@ if [ "$DELETE_MODE" = true ]; then
 fi
 
 # Idempotency check: is the EPP deployment already running and available?
-if [ "$FORCE" = false ] && kubectl -n "$NAMESPACE" wait --for=condition=Available deployment/oscar-inferencemesh-epp --timeout=2s &> /dev/null; then
+CURRENT_WORKER_WAIT_TIMEOUT=$(kubectl -n "$NAMESPACE" get deployment oscar-inferencemesh-epp -o 'jsonpath={.spec.template.spec.containers[?(@.name=="epp")].env[?(@.name=="EPP_WORKER_WAIT_TIMEOUT_SEC")].value}' 2>/dev/null || true)
+if [ "$FORCE" = false ] && [ "$CURRENT_WORKER_WAIT_TIMEOUT" = "$EPP_WORKER_WAIT_TIMEOUT_SEC" ] && kubectl -n "$NAMESPACE" wait --for=condition=Available deployment/oscar-inferencemesh-epp --timeout=2s &> /dev/null; then
     log_info "EPP deployment is already running and Available in namespace '$NAMESPACE'. Skipping rebuild and redeployment."
     exit 0
 fi

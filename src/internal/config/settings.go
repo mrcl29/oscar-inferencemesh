@@ -18,6 +18,7 @@ type Settings struct {
 	DefaultBackendFQDN        string        `json:"default_backend_fqdn"`
 	DefaultBackendPort        int           `json:"default_backend_port"`
 	MetricsScrapeTimeout      time.Duration `json:"metrics_scrape_timeout"`
+	WorkerWaitTimeout         time.Duration `json:"worker_wait_timeout"`
 	OscarEndpoint             string        `json:"oscar_endpoint"`
 	OscarClusterID            string        `json:"oscar_cluster_id"`
 	OscarVerifySSL            bool          `json:"oscar_verify_ssl"`
@@ -38,6 +39,7 @@ func FromEnv() Settings {
 	namespace := "oscar-svc"
 	httpPort := 9091
 	grpcPort := 9002
+	workerWaitTimeout := 30
 	oscarEndpoint := "https://localhost.direct"
 	oscarClusterID := "local"
 	oscarVerifySSL := false
@@ -55,6 +57,9 @@ func FromEnv() Settings {
 		}
 		if fileCfg.Defaults.GRPCPort > 0 {
 			grpcPort = fileCfg.Defaults.GRPCPort
+		}
+		if fileCfg.Defaults.WorkerWaitTimeout > 0 {
+			workerWaitTimeout = fileCfg.Defaults.WorkerWaitTimeout
 		}
 		if name, cluster, ok := fileCfg.GetActiveCluster(); ok {
 			oscarClusterID = name
@@ -84,6 +89,7 @@ func FromEnv() Settings {
 		DefaultBackendFQDN:        defaultFQDN,
 		DefaultBackendPort:        envIntOrDefault("EPP_DEFAULT_BACKEND_PORT", 8000),
 		MetricsScrapeTimeout:      time.Duration(timeoutSec * float64(time.Second)),
+		WorkerWaitTimeout:         time.Duration(envIntOrDefault("EPP_WORKER_WAIT_TIMEOUT_SEC", workerWaitTimeout)) * time.Second,
 		OscarEndpoint:             envOrDefault("OSCAR_ENDPOINT", oscarEndpoint),
 		OscarClusterID:            envOrDefault("OSCAR_CLUSTER_ID", oscarClusterID),
 		OscarVerifySSL:            envBoolOrDefault("OSCAR_VERIFY_SSL", oscarVerifySSL),

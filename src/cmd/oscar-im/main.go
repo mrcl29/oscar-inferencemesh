@@ -28,16 +28,17 @@ OSCAR-IM v` + cliVersion + "\n"
 )
 
 type initOptions struct {
-	docker        bool
-	skipGateway   bool
-	keepGateway   bool
-	force         bool
-	oscarEndpoint string
-	oscarCluster  string
-	modelName     string
-	namespace     string
-	httpPort      int
-	grpcPort      int
+	docker            bool
+	skipGateway       bool
+	keepGateway       bool
+	force             bool
+	oscarEndpoint     string
+	oscarCluster      string
+	modelName         string
+	namespace         string
+	httpPort          int
+	grpcPort          int
+	workerWaitTimeout int
 }
 
 type removeOptions struct {
@@ -112,6 +113,7 @@ func handleInit(args []string, isRestart bool) {
 	defaultNamespace := "oscar-svc"
 	defaultHTTPPort := 9091
 	defaultGRPCPort := 9002
+	defaultWorkerWaitTimeout := 30
 	defaultDocker := false
 
 	if fileCfg != nil {
@@ -126,6 +128,9 @@ func handleInit(args []string, isRestart bool) {
 		}
 		if fileCfg.Defaults.GRPCPort > 0 {
 			defaultGRPCPort = fileCfg.Defaults.GRPCPort
+		}
+		if fileCfg.Defaults.WorkerWaitTimeout > 0 {
+			defaultWorkerWaitTimeout = fileCfg.Defaults.WorkerWaitTimeout
 		}
 		defaultDocker = fileCfg.Defaults.Docker
 		if clusterName, cl, ok := fileCfg.GetActiveCluster(); ok {
@@ -147,8 +152,19 @@ func handleInit(args []string, isRestart bool) {
 	fs.StringVar(&opts.namespace, "namespace", envOrDefault("EPP_NAMESPACE", defaultNamespace), "Target Kubernetes namespace")
 	fs.IntVar(&opts.httpPort, "http-port", defaultHTTPPort, "EPP HTTP verification server port")
 	fs.IntVar(&opts.grpcPort, "grpc-port", defaultGRPCPort, "EPP gRPC ext_proc server port")
+	fs.IntVar(&opts.workerWaitTimeout, "worker-wait-timeout", defaultWorkerWaitTimeout, "Maximum seconds to wait for a ready worker (default: 30)")
 
 	_ = fs.Parse(args)
+	if opts.workerWaitTimeout <= 0 {
+		logErr("--worker-wait-timeout must be greater than zero")
+		os.Exit(1)
+	}
+	if fileCfg != nil {
+		if err := persistWorkerWaitTimeout(fileCfg, opts.workerWaitTimeout); err != nil {
+			logErr(fmt.Sprintf("failed to persist worker wait timeout: %v", err))
+			os.Exit(1)
+		}
+	}
 	if opts.keepGateway {
 		opts.skipGateway = true
 	}
@@ -162,6 +178,7 @@ func handleInit(args []string, isRestart bool) {
 	fmt.Printf("  - Namespace:          %s\n", opts.namespace)
 	fmt.Printf("  - OSCAR Endpoint:     %s (Cluster: %s)\n", opts.oscarEndpoint, opts.oscarCluster)
 	fmt.Printf("  - ExtProc gRPC Port:  %d\n", opts.grpcPort)
+	fmt.Printf("  - Worker Wait Timeout: %d seconds\n", opts.workerWaitTimeout)
 	fmt.Printf("  - HTTP Verify Port:   %d\n", opts.httpPort)
 	fmt.Println()
 
@@ -241,11 +258,12 @@ func handleInit(args []string, isRestart bool) {
 		deployEppScript := filepath.Join(repoRoot, "scripts", "production", "deploy-epp.sh")
 		if fileExists(deployEppScript) {
 			env := map[string]string{
-				"NAMESPACE":        opts.namespace,
-				"MODEL_NAME":       opts.modelName,
-				"OSCAR_ENDPOINT":   opts.oscarEndpoint,
-				"OSCAR_CLUSTER_ID": opts.oscarCluster,
-				"FORCE":            strconv.FormatBool(opts.force),
+				"NAMESPACE":                   opts.namespace,
+				"MODEL_NAME":                  opts.modelName,
+				"OSCAR_ENDPOINT":              opts.oscarEndpoint,
+				"OSCAR_CLUSTER_ID":            opts.oscarCluster,
+				"FORCE":                       strconv.FormatBool(opts.force),
+				"EPP_WORKER_WAIT_TIMEOUT_SEC": strconv.Itoa(opts.workerWaitTimeout),
 			}
 			if err := runScriptWithEnv(deployEppScript, env); err != nil {
 				logErr(fmt.Sprintf("Failed to deploy EPP container: %v", err))
@@ -254,13 +272,14 @@ func handleInit(args []string, isRestart bool) {
 		} else {
 			logInfo("Running in standalone binary mode (using embedded EPP deployment manifest)...")
 			eppOpts := k8s.EPPDeployOptions{
-				Namespace:      opts.namespace,
-				ModelName:      opts.modelName,
-				EPPImage:       envOrDefault("EPP_IMAGE", "oscar-inferencemesh-epp:latest"),
-				OscarEndpoint:  opts.oscarEndpoint,
-				OscarClusterID: opts.oscarCluster,
-				OscarVerifySSL: envOrDefault("OSCAR_VERIFY_SSL", "false"),
-				Force:          opts.force,
+				Namespace:         opts.namespace,
+				ModelName:         opts.modelName,
+				EPPImage:          envOrDefault("EPP_IMAGE", "oscar-inferencemesh-epp:latest"),
+				OscarEndpoint:     opts.oscarEndpoint,
+				OscarClusterID:    opts.oscarCluster,
+				OscarVerifySSL:    envOrDefault("OSCAR_VERIFY_SSL", "false"),
+				WorkerWaitTimeout: strconv.Itoa(opts.workerWaitTimeout),
+				Force:             opts.force,
 			}
 			if err := deployer.DeployEPP(deployCtx, eppOpts); err != nil {
 				logErr(fmt.Sprintf("Failed to deploy EPP container: %v", err))
@@ -339,6 +358,14 @@ func handleInit(args []string, isRestart bool) {
 	fmt.Printf("  ✓ Ready to process model '%s'\n\n", opts.modelName)
 }
 
+func persistWorkerWaitTimeout(fileCfg *config.FileConfig, seconds int) error {
+	if seconds <= 0 {
+		return fmt.Errorf("worker wait timeout must be greater than zero")
+	}
+	fileCfg.Defaults.WorkerWaitTimeout = seconds
+	return config.SaveFileConfig("", fileCfg)
+}
+
 func handleRestart(args []string) {
 	fmt.Print(banner)
 	fmt.Println("===> Restarting OSCAR-IM (remove + init)...")
@@ -377,6 +404,7 @@ func handleRemove(args []string, isRestart bool) {
 	fs.StringVar(&opts.oscarCluster, "oscar-cluster", "", "Ignored by remove")
 	fs.IntVar(&opts.httpPort, "http-port", 9091, "Ignored by remove")
 	fs.IntVar(&opts.grpcPort, "grpc-port", 9002, "Ignored by remove")
+	fs.Int("worker-wait-timeout", 30, "Ignored by remove (passed to init during restart)")
 
 	_ = fs.Parse(args)
 	if opts.skipGateway {

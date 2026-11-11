@@ -145,7 +145,7 @@ func printConfigHelp(out io.Writer) {
 	fmt.Fprintln(out, "  path                  Show path to active configuration file")
 	fmt.Fprintln(out, "  use <cluster-name>    Switch the active OSCAR cluster")
 	fmt.Fprintln(out, "  import [path]         Import clusters from ~/.oscar-cli/config.yaml")
-	fmt.Fprintln(out, "  set <key> <value>     Update a default property (model, namespace, http_port, docker)")
+	fmt.Fprintln(out, "  set <key> <value>     Update a default property (model, namespace, http_port, grpc_port, worker_wait_timeout_sec, docker)")
 }
 
 // PrintConfig outputs the configuration in formatted YAML.
@@ -176,10 +176,16 @@ func setConfigKey(cfg *FileConfig, path, key, val string, out io.Writer) error {
 			return fmt.Errorf("invalid port: %s", val)
 		}
 		cfg.Defaults.GRPCPort = p
+	case "worker_wait_timeout_sec":
+		p, err := strconv.Atoi(val)
+		if err != nil || p <= 0 {
+			return fmt.Errorf("invalid worker wait timeout: %s (must be greater than zero)", val)
+		}
+		cfg.Defaults.WorkerWaitTimeout = p
 	case "docker":
 		cfg.Defaults.Docker = val == "true" || val == "1"
 	default:
-		return fmt.Errorf("unsupported config key '%s'. Supported keys: model, namespace, http_port, grpc_port, docker", key)
+		return fmt.Errorf("unsupported config key '%s'. Supported keys: model, namespace, http_port, grpc_port, worker_wait_timeout_sec, docker", key)
 	}
 
 	if err := SaveFileConfig(path, cfg); err != nil {

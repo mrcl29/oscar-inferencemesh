@@ -26,10 +26,11 @@ func buildServer(settings config.Settings) *extproc.Server {
 
 	// TODO(FG-01): Wire an active selection policy when implemented; retain explicit pass-through as the baseline.
 	selector := application.NewPassThroughSelector()
-	pickerService := application.NewEndpointPickerService(
+	pickerService := application.NewEndpointPickerServiceWithWaitTimeout(
 		discovery,
 		metricsCollector,
 		selector,
+		settings.WorkerWaitTimeout,
 	)
 
 	// TODO(FG-05): Wire configured scaling thresholds and replica bounds into an active policy; keep no-op available.

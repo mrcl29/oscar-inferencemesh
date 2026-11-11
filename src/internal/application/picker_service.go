@@ -4,6 +4,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -11,6 +12,53 @@ import (
 
 	"github.com/grycap/oscar-inferencemesh/src/internal/domain"
 )
+
+var ErrNoReadyWorkers = errors.New("no ready workers before wait deadline")
+
+// WaitForReadyEndpoints polls discovery until at least one ready endpoint appears or the wait expires.
+func WaitForReadyEndpoints(ctx context.Context, timeout, interval time.Duration, discover func(context.Context) ([]domain.WorkerEndpoint, error)) ([]domain.WorkerEndpoint, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		if err := waitCtx.Err(); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, ErrNoReadyWorkers
+		}
+		endpoints, err := discover(waitCtx)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if waitCtx.Err() != nil {
+			return nil, ErrNoReadyWorkers
+		}
+		if err == nil {
+			ready := make([]domain.WorkerEndpoint, 0, len(endpoints))
+			for _, endpoint := range endpoints {
+				if endpoint.Ready {
+					ready = append(ready, endpoint)
+				}
+			}
+			if len(ready) > 0 {
+				return ready, nil
+			}
+		}
+		ticker := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			ticker.Stop()
+			return nil, ctx.Err()
+		case <-waitCtx.Done():
+			ticker.Stop()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, ErrNoReadyWorkers
+		case <-ticker.C:
+		}
+	}
+}
 
 // PassThroughSelector implements domain.EndpointSelectorPort as a verifiable no-op.
 // It inspects candidate endpoints and metrics snapshots, delegates actual routing
@@ -68,14 +116,22 @@ type PickerVerificationState struct {
 
 // EndpointPickerService orchestrates endpoint discovery, metrics scraping, and replica selection.
 type EndpointPickerService struct {
-	discovery  domain.EndpointDiscoveryPort
-	metrics    domain.MetricsCollectorPort
-	selector   domain.EndpointSelectorPort
-	maxHistory int
+	discovery   domain.EndpointDiscoveryPort
+	metrics     domain.MetricsCollectorPort
+	selector    domain.EndpointSelectorPort
+	maxHistory  int
+	waitTimeout time.Duration
 
 	mu             sync.RWMutex
 	totalProcessed int
 	history        []domain.RoutingDecision
+}
+
+// NewEndpointPickerServiceWithWaitTimeout configures bounded waiting for ready workers.
+func NewEndpointPickerServiceWithWaitTimeout(discovery domain.EndpointDiscoveryPort, metrics domain.MetricsCollectorPort, selector domain.EndpointSelectorPort, timeout time.Duration) *EndpointPickerService {
+	s := NewEndpointPickerService(discovery, metrics, selector)
+	s.waitTimeout = timeout
+	return s
 }
 
 // NewEndpointPickerService wires the EndpointPickerService use case with its ports.
@@ -99,7 +155,26 @@ func (s *EndpointPickerService) ProcessRequest(
 	reqCtx domain.InferenceRequestContext,
 ) domain.RoutingDecision {
 	// TODO(FG-01): Preserve discovery failures in the routing outcome instead of silently treating them as an empty pool.
-	endpoints, _ := s.discovery.ListEndpoints(ctx, reqCtx.Model)
+	var endpoints []domain.WorkerEndpoint
+	if s.waitTimeout > 0 {
+		var err error
+		endpoints, err = WaitForReadyEndpoints(ctx, s.waitTimeout, 250*time.Millisecond, func(ctx context.Context) ([]domain.WorkerEndpoint, error) {
+			return s.discovery.ListEndpoints(ctx, reqCtx.Model)
+		})
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return domain.RoutingDecision{RequestID: reqCtx.RequestID, Model: reqCtx.Model, Reason: err.Error(), DecidedAt: time.Now().UTC()}
+			}
+			decision := domain.RoutingDecision{RequestID: reqCtx.RequestID, Model: reqCtx.Model, Reason: "no_ready_workers", DecidedAt: time.Now().UTC()}
+			return decision
+		}
+	} else {
+		var err error
+		endpoints, err = s.discovery.ListEndpoints(ctx, reqCtx.Model)
+		if err != nil || !hasReadyEndpoint(endpoints) {
+			return domain.RoutingDecision{RequestID: reqCtx.RequestID, Model: reqCtx.Model, Reason: "no_ready_workers", DecidedAt: time.Now().UTC()}
+		}
+	}
 	metricsMap := s.metrics.CollectAll(ctx, endpoints)
 	decision := s.selector.SelectEndpoint(reqCtx, endpoints, metricsMap)
 
@@ -112,6 +187,15 @@ func (s *EndpointPickerService) ProcessRequest(
 	s.mu.Unlock()
 
 	return decision
+}
+
+func hasReadyEndpoint(endpoints []domain.WorkerEndpoint) bool {
+	for _, endpoint := range endpoints {
+		if endpoint.Ready {
+			return true
+		}
+	}
+	return false
 }
 
 // GetVerificationState returns diagnostic evidence that the picker pipeline is wired.

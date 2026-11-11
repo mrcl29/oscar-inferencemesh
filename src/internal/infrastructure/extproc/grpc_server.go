@@ -11,6 +11,7 @@ import (
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc"
 
 	"github.com/grycap/oscar-inferencemesh/src/internal/application"
@@ -62,6 +63,9 @@ func (s *GrpcExtProcServer) Process(srv extprocv3.ExternalProcessor_ProcessServe
 		switch v := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
 			resp := s.handleRequestHeaders(ctx, v.RequestHeaders)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if err := srv.Send(resp); err != nil {
 				return fmt.Errorf("failed to send request headers response: %w", err)
 			}
@@ -123,6 +127,19 @@ func (s *GrpcExtProcServer) handleRequestHeaders(
 	}
 
 	decision := s.picker.ProcessRequest(ctx, reqCtx)
+	if ctx.Err() != nil {
+		return nil
+	}
+	if decision.Reason == "no_ready_workers" {
+		return &extprocv3.ProcessingResponse{
+			Response: &extprocv3.ProcessingResponse_ImmediateResponse{
+				ImmediateResponse: &extprocv3.ImmediateResponse{
+					Status: &typev3.HttpStatus{Code: typev3.StatusCode_ServiceUnavailable},
+					Body:   []byte("no ready inference workers available"),
+				},
+			},
+		}
+	}
 	// TODO(FG-02): Translate SelectedEndpoint into an effective, supported Envoy routing
 	// mechanism; current mutations carry diagnostics only. Prove the selected worker
 	// receives traffic end to end, without assuming an arbitrary header changes routing.
