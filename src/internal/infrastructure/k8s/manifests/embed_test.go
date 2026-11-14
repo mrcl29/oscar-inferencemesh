@@ -29,6 +29,22 @@ func TestEmbeddedManifestsExist(t *testing.T) {
 	if !strings.Contains(string(policyData), "EnvoyExtensionPolicy") {
 		t.Fatalf("expected manifest to contain 'EnvoyExtensionPolicy', got: %s", string(policyData[:100]))
 	}
+
+	gwData, err := GetEnvoyGatewayManifest("")
+	if err != nil {
+		t.Fatalf("expected embedded EnvoyGateway manifest, got error: %v", err)
+	}
+	if !strings.Contains(string(gwData), "kind: Gateway") {
+		t.Fatalf("expected EnvoyGateway manifest to contain 'kind: Gateway'")
+	}
+
+	routeData, err := GetAIGatewayRouteManifest("")
+	if err != nil {
+		t.Fatalf("expected embedded AIGatewayRoute manifest, got error: %v", err)
+	}
+	if !strings.Contains(string(routeData), "kind: AIGatewayRoute") {
+		t.Fatalf("expected AIGatewayRoute manifest to contain 'kind: AIGatewayRoute'")
+	}
 }
 
 func TestRenderManifest(t *testing.T) {

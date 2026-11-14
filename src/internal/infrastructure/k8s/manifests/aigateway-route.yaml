@@ -1,0 +1,56 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: ${BACKEND_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: ${BACKEND_NAME}
+    app.kubernetes.io/part-of: oscar-inferencemesh
+    oscar-inferencemesh.io/model: ${MODEL_NAME}
+spec:
+  endpoints:
+    - fqdn:
+        hostname: ${TARGET_BACKEND_HOST}
+        port: ${TARGET_BACKEND_PORT}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: ${AI_SERVICE_BACKEND_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: ${AI_SERVICE_BACKEND_NAME}
+    app.kubernetes.io/part-of: oscar-inferencemesh
+    oscar-inferencemesh.io/model: ${MODEL_NAME}
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: ${BACKEND_NAME}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: ${ROUTE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: ${ROUTE_NAME}
+    app.kubernetes.io/part-of: oscar-inferencemesh
+    oscar-inferencemesh.io/model: ${MODEL_NAME}
+spec:
+  parentRefs:
+    - name: ${GATEWAY_NAME}
+      namespace: ${GATEWAY_NAMESPACE}
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - name: ${ROUTE_RULE_NAME}
+      matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: ${MODEL_NAME}
+      backendRefs:
+        - name: ${AI_SERVICE_BACKEND_NAME}
+          weight: 1

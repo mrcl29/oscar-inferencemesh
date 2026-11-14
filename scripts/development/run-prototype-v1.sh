@@ -126,24 +126,19 @@ if [ "$CLEAN_MODE" = true ]; then
     kubectl delete aiservicebackend "$AI_SERVICE_BACKEND_NAME" -n "$NAMESPACE" --ignore-not-found=true
     kubectl delete backend "$BACKEND_NAME" -n "$NAMESPACE" --ignore-not-found=true
 
-    # 2. Delete LLMInferenceService (terminates vLLM worker pods & EPP scheduler)
-    log_info "2. Deleting LLMInferenceService '$SERVICE_NAME'..."
-    kubectl delete llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" --ignore-not-found=true
+    # 2. Delete LLMInferenceService & OSCAR service via shared model script
+    log_info "2. Removing LLMInferenceService '${SERVICE_NAME}' and OSCAR service '${MODEL_NAME}'..."
+    NAMESPACE="$NAMESPACE" MODEL_NAME="$MODEL_NAME" SERVICE_NAME="$SERVICE_NAME" \
+        bash "$SCRIPT_DIR/deploy-qwen-two-pods.sh" --clean "$MODEL_YAML" "$SERVICE_YAML"
 
-    # 3. Unregister from OSCAR service catalog
-    if command -v oscar-cli &> /dev/null; then
-        log_info "3. Removing service '$MODEL_NAME' from OSCAR..."
-        oscar-cli service remove "$MODEL_NAME" 2> /dev/null || true
-    fi
-
-    # 4. Optional: Clean Gateway infrastructure if requested with --clean-all
+    # 3. Optional: Clean Gateway infrastructure if requested with --clean-all
     if [ "$CLEAN_GATEWAY" = true ]; then
-        log_info "4. Deleting Envoy AI Gateway infrastructure..."
+        log_info "3. Deleting Envoy AI Gateway infrastructure..."
         kubectl delete gateway "$GATEWAY_NAME" -n "$GATEWAY_NAMESPACE" --ignore-not-found=true
         kubectl delete envoyproxy "${GATEWAY_NAME}-proxy-config" -n "$GATEWAY_NAMESPACE" --ignore-not-found=true
         docker rm -f envoy-ai-gateway-localhost-proxy &> /dev/null || true
     else
-        log_info "4. Keeping shared Envoy AI Gateway infrastructure intact (use --clean-all to delete)."
+        log_info "3. Keeping shared Envoy AI Gateway infrastructure intact (use --clean-all to delete)."
     fi
 
     echo ""
@@ -210,53 +205,14 @@ log_info "  - POST ${GATEWAY_LOCAL_URL}/v1/completions"
 log_info "  - POST ${GATEWAY_LOCAL_URL}/v1/embeddings"
 log_info "  - GET  ${GATEWAY_LOCAL_URL}/v1/models"
 
-# 4. Deploy Model via OSCAR CLI (Independent Model layer)
-log_step "3. Registering model in OSCAR"
-if command -v oscar-cli &> /dev/null; then
-    if oscar-cli service list 2> /dev/null | grep -q "$MODEL_NAME"; then
-        log_info "OSCAR service '$MODEL_NAME' already registered."
-    else
-        log_info "Registering '$MODEL_NAME' with oscar-cli..."
-        oscar-cli apply "$MODEL_YAML" || log_warn "oscar-cli apply returned non-zero, proceeding..."
-    fi
-else
-    log_warn "oscar-cli not found, skipping OSCAR registration (Kubernetes direct mode)."
-fi
-
-# Synchronize exact resource values from existing OSCAR service to avoid triggering redundant RollingUpdates
-if kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" &> /dev/null; then
-    EXISTING_CPU_LIMIT=$(kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.containers[0].resources.limits.cpu}' 2> /dev/null || echo "")
-    EXISTING_MEM_LIMIT=$(kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.containers[0].resources.limits.memory}' 2> /dev/null || echo "")
-    EXISTING_CPU_REQ=$(kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.containers[0].resources.requests.cpu}' 2> /dev/null || echo "")
-    EXISTING_MEM_REQ=$(kubectl get llminferenceservice "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.template.containers[0].resources.requests.memory}' 2> /dev/null || echo "")
-
-    [ -n "$EXISTING_CPU_LIMIT" ] && export WORKER_CPU_LIMIT="$EXISTING_CPU_LIMIT"
-    [ -n "$EXISTING_MEM_LIMIT" ] && export WORKER_MEMORY_LIMIT="$EXISTING_MEM_LIMIT"
-    [ -n "$EXISTING_CPU_REQ" ] && export WORKER_CPU_REQUEST="$EXISTING_CPU_REQ"
-    [ -n "$EXISTING_MEM_REQ" ] && export WORKER_MEMORY_REQUEST="$EXISTING_MEM_REQ"
-fi
-
-# 5. Deploy LLMInferenceService & Router Scheduler (Independent Service layer)
-log_step "4. Dynamically applying LLMInferenceService ($SERVICE_YAML)"
-envsubst < "$SERVICE_YAML" | kubectl apply -f -
+# 4-5. Register Model via OSCAR CLI & Deploy LLMInferenceService via shared model deployment script
+log_step "3. Deploying model '${MODEL_NAME}' and LLMInferenceService (${REPLICAS} replica(s))"
+SYNC_EXISTING_RESOURCES=true REPLICAS="$REPLICAS" \
+    bash "$SCRIPT_DIR/deploy-qwen-two-pods.sh" --replicas "$REPLICAS" "$MODEL_YAML" "$SERVICE_YAML"
 
 # 6. Relate Gateway and LLM Service via AI Gateway Route (Independent Route layer)
-log_step "5. Dynamically wiring Envoy AI Gateway Route ($ROUTE_YAML)"
+log_step "4. Dynamically wiring Envoy AI Gateway Route ($ROUTE_YAML)"
 envsubst < "$ROUTE_YAML" | kubectl apply -f -
-
-# 7. Wait for Router Scheduler (EPP) and vLLM Worker Pool Readiness
-log_step "6. Waiting for llm-d Router Scheduler and vLLM workers readiness"
-log_info "Waiting for router scheduler rollout..."
-while ! kubectl -n "$NAMESPACE" get deployment "${SERVICE_NAME}-kserve-router-scheduler" &> /dev/null; do
-    sleep 2
-done
-kubectl -n "$NAMESPACE" rollout status "deployment/${SERVICE_NAME}-kserve-router-scheduler" --timeout=300s
-
-log_info "Waiting for vLLM inference worker pool rollout..."
-while ! kubectl -n "$NAMESPACE" get deployment "${SERVICE_NAME}-kserve" &> /dev/null; do
-    sleep 2
-done
-kubectl -n "$NAMESPACE" rollout status "deployment/${SERVICE_NAME}-kserve" --timeout=600s
 
 log_info "Checking InferencePool and Route status..."
 kubectl -n "$NAMESPACE" get inferencepool "${SERVICE_NAME}-inference-pool" || true

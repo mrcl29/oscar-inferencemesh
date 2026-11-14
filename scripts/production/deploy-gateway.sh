@@ -51,22 +51,44 @@ if ! command -v kubectl &> /dev/null; then
     exit 1
 fi
 
+REQUIRED_AIGW_CRDS=(
+    "aigatewayroutes.aigateway.envoyproxy.io"
+    "aiservicebackends.aigateway.envoyproxy.io"
+)
+
+wait_if_crd_terminating() {
+    local crd="$1"
+    local del_ts
+    del_ts=$(kubectl get crd "$crd" -o jsonpath='{.metadata.deletionTimestamp}' 2> /dev/null || true)
+    if [ -n "$del_ts" ]; then
+        log_warn "CRD '$crd' is still terminating from a previous uninstall; waiting for deletion to finish..."
+        kubectl wait --for=delete "crd/${crd}" --timeout=60s || true
+    fi
+}
+
 if [ "$UNINSTALL" = true ]; then
     log_step "Uninstalling Envoy AI Gateway and Envoy Gateway..."
 
     if helm status aieg -n envoy-ai-gateway-system &> /dev/null; then
         log_info "Uninstalling Envoy AI Gateway controller Helm release..."
-        helm uninstall aieg -n envoy-ai-gateway-system || true
+        helm uninstall aieg -n envoy-ai-gateway-system --wait || true
     fi
 
     if helm status aieg-crd -n envoy-ai-gateway-system &> /dev/null; then
         log_info "Uninstalling Envoy AI Gateway CRD Helm release..."
-        helm uninstall aieg-crd -n envoy-ai-gateway-system || true
+        helm uninstall aieg-crd -n envoy-ai-gateway-system --wait || true
     fi
+
+    for crd in "${REQUIRED_AIGW_CRDS[@]}"; do
+        if kubectl get crd "$crd" &> /dev/null; then
+            log_info "Waiting for CRD '$crd' deletion to finalize..."
+            kubectl wait --for=delete "crd/${crd}" --timeout=60s || true
+        fi
+    done
 
     if helm status eg -n envoy-gateway-system &> /dev/null; then
         log_info "Uninstalling Envoy Gateway Helm release..."
-        helm uninstall eg -n envoy-gateway-system || true
+        helm uninstall eg -n envoy-gateway-system --wait || true
     fi
 
     log_info "Cleaning up namespaces..."
@@ -96,24 +118,33 @@ if [ "$k8s_ready" = false ]; then
     exit 1
 fi
 
-# Idempotency check: are both deployments already running and configured with Backend API?
+# Idempotency check: are both deployments running, Backend API enabled, and AI Gateway CRDs established?
 eg_ready=false
 aieg_ready=false
 backend_enabled=false
+aigw_crds_ready=false
 
-if kubectl -n envoy-gateway-system wait --for=condition=Available deployment/envoy-gateway --timeout=1s &> /dev/null; then
-    eg_ready=true
-fi
-if kubectl -n envoy-ai-gateway-system wait --for=condition=Available deployment/ai-gateway-controller --timeout=1s &> /dev/null; then
-    aieg_ready=true
-fi
-if kubectl -n envoy-gateway-system get configmap envoy-gateway-config -o jsonpath='{.data.envoy-gateway\.yaml}' 2> /dev/null | grep -q "enableBackend: true"; then
-    backend_enabled=true
-fi
+if [ "${FORCE:-false}" != "true" ]; then
+    if kubectl -n envoy-gateway-system wait --for=condition=Available deployment/envoy-gateway --timeout=1s &> /dev/null; then
+        eg_ready=true
+    fi
+    if kubectl -n envoy-ai-gateway-system wait --for=condition=Available deployment/ai-gateway-controller --timeout=1s &> /dev/null; then
+        aieg_ready=true
+    fi
+    if kubectl -n envoy-gateway-system get configmap envoy-gateway-config -o jsonpath='{.data.envoy-gateway\.yaml}' 2> /dev/null | grep -q "enableBackend: true"; then
+        backend_enabled=true
+    fi
+    if kubectl wait --for=condition=Established \
+        crd/aigatewayroutes.aigateway.envoyproxy.io \
+        crd/aiservicebackends.aigateway.envoyproxy.io \
+        --timeout=1s &> /dev/null; then
+        aigw_crds_ready=true
+    fi
 
-if [ "$eg_ready" = true ] && [ "$aieg_ready" = true ] && [ "$backend_enabled" = true ]; then
-    log_info "Envoy Gateway and Envoy AI Gateway are already deployed and Available. Skipping installation."
-    exit 0
+    if [ "$eg_ready" = true ] && [ "$aieg_ready" = true ] && [ "$backend_enabled" = true ] && [ "$aigw_crds_ready" = true ]; then
+        log_info "Envoy Gateway and Envoy AI Gateway are already deployed, CRDs established, and Available. Skipping installation."
+        exit 0
+    fi
 fi
 
 # 1. Deploy Envoy Gateway
@@ -132,11 +163,20 @@ log_info "Envoy Gateway is Available."
 
 # 2. Deploy Envoy AI Gateway CRDs
 log_step "2. Deploying Envoy AI Gateway CRDs (v${AI_GATEWAY_VERSION})..."
+for crd in "${REQUIRED_AIGW_CRDS[@]}"; do
+    wait_if_crd_terminating "$crd"
+done
 helm upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm \
     --version "$AI_GATEWAY_VERSION" \
     --namespace envoy-ai-gateway-system \
     --create-namespace \
     --force-conflicts
+
+log_info "Verifying Envoy AI Gateway CRDs are Established..."
+kubectl wait --for=condition=Established \
+    crd/aigatewayroutes.aigateway.envoyproxy.io \
+    crd/aiservicebackends.aigateway.envoyproxy.io \
+    --timeout=60s
 
 # 3. Deploy Envoy AI Gateway Controller
 log_step "3. Deploying Envoy AI Gateway Controller (v${AI_GATEWAY_VERSION})..."

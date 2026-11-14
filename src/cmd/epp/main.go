@@ -13,19 +13,27 @@ import (
 
 	"github.com/grycap/oscar-inferencemesh/src/internal/application"
 	"github.com/grycap/oscar-inferencemesh/src/internal/config"
+	"github.com/grycap/oscar-inferencemesh/src/internal/domain"
 	"github.com/grycap/oscar-inferencemesh/src/internal/infrastructure/extproc"
 	"github.com/grycap/oscar-inferencemesh/src/internal/infrastructure/k8s"
 	"github.com/grycap/oscar-inferencemesh/src/internal/infrastructure/metrics"
 	"github.com/grycap/oscar-inferencemesh/src/internal/infrastructure/oscar"
 )
 
+func buildSelector(settings config.Settings) domain.EndpointSelectorPort {
+	mode := domain.RoutingMode(settings.RoutingMode)
+	if mode == domain.RoutingModePassThrough {
+		return application.NewPassThroughSelector()
+	}
+	return application.NewActiveSelector(mode, settings.MetricsMaxAge)
+}
+
 func buildServer(settings config.Settings) *extproc.Server {
 	discovery := k8s.NewEndpointDiscoveryAdapter(settings)
 	metricsCollector := metrics.NewVllmPrometheusAdapter(settings)
 	oscarClient := oscar.NewControlPlaneAdapter(settings)
 
-	// TODO(FG-01): Wire an active selection policy when implemented; retain explicit pass-through as the baseline.
-	selector := application.NewPassThroughSelector()
+	selector := buildSelector(settings)
 	pickerService := application.NewEndpointPickerServiceWithWaitTimeout(
 		discovery,
 		metricsCollector,

@@ -64,7 +64,7 @@ func (s *Server) BuildVerificationReport(ctx context.Context) VerificationReport
 	return VerificationReport{
 		Component:            "oscar-inferencemesh-epp",
 		Status:               "ok",
-		Mode:                 "pass_through_skeleton",
+		Mode:                 s.settings.RoutingMode,
 		Config:               s.settings,
 		Picker:               s.picker.GetVerificationState(),
 		Autoscaler:           s.autoscaler.GetVerificationState(ctx),
@@ -114,7 +114,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{
 			"status": "healthy",
-			"mode":   "pass_through_skeleton",
+			"mode":   s.settings.RoutingMode,
 			"model":  s.settings.ModelName,
 		}, nil)
 	})

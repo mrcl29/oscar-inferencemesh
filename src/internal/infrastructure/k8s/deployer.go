@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/grycap/oscar-inferencemesh/src/internal/infrastructure/k8s/manifests"
 )
@@ -35,11 +36,37 @@ type ExtensionPolicyOptions struct {
 	Force               bool
 }
 
+// GatewayDataPlaneOptions configures the EnvoyProxy, GatewayClass, and Gateway data plane.
+type GatewayDataPlaneOptions struct {
+	GatewayName        string
+	GatewayNamespace   string
+	GatewayPort        int
+	GatewayServiceType string
+	DiskManifestPath   string
+	Force              bool
+}
+
+// ModelRouteOptions configures connecting a model backend to the Envoy AI Gateway.
+type ModelRouteOptions struct {
+	Namespace         string
+	ModelName         string
+	GatewayName       string
+	GatewayNamespace  string
+	TargetBackendHost string
+	TargetBackendPort int
+	DiskManifestPath  string
+	Force             bool
+}
+
 // Deployer defines the contract for deploying, updating, and removing mesh components.
 type Deployer interface {
 	DeployGateway(ctx context.Context, force bool) error
+	DeployGatewayDataPlane(ctx context.Context, opts GatewayDataPlaneOptions) error
 	DeployEPP(ctx context.Context, opts EPPDeployOptions) error
 	DeployExtensionPolicy(ctx context.Context, opts ExtensionPolicyOptions) error
+	ConnectModelRoute(ctx context.Context, opts ModelRouteOptions) error
+	DisconnectModelRoute(ctx context.Context, opts ModelRouteOptions) error
+	RemoveGatewayDataPlane(ctx context.Context, opts GatewayDataPlaneOptions) error
 	RemoveGateway(ctx context.Context) error
 	RemoveEPP(ctx context.Context, opts EPPDeployOptions) error
 	RemoveExtensionPolicy(ctx context.Context, opts ExtensionPolicyOptions) error
@@ -70,6 +97,11 @@ func NewDefaultKubeDeployer() *DefaultKubeDeployer {
 	}
 }
 
+var requiredAIGatewayCRDs = []string{
+	"aigatewayroutes.aigateway.envoyproxy.io",
+	"aiservicebackends.aigateway.envoyproxy.io",
+}
+
 // DeployGateway provisions Envoy Gateway and Envoy AI Gateway via Helm charts with idempotency.
 func (d *DefaultKubeDeployer) DeployGateway(ctx context.Context, force bool) error {
 	// Verify helm exists
@@ -77,13 +109,14 @@ func (d *DefaultKubeDeployer) DeployGateway(ctx context.Context, force bool) err
 		return fmt.Errorf("helm not found in PATH: please install helm first")
 	}
 
-	// Idempotency check: are both deployments already running and Available with Backend API?
+	// Idempotency check: are both deployments Available, Backend API enabled, and AI Gateway CRDs established?
 	if !force {
 		egReady := d.isDeploymentAvailable(ctx, "envoy-gateway-system", "envoy-gateway")
 		aiegReady := d.isDeploymentAvailable(ctx, "envoy-ai-gateway-system", "ai-gateway-controller")
 		backendEnabled := d.isBackendAPIEnabled(ctx)
+		crdsReady := d.areAIGatewayCRDsEstablished(ctx)
 
-		if egReady && aiegReady && backendEnabled {
+		if egReady && aiegReady && backendEnabled && crdsReady {
 			return nil
 		}
 	}
@@ -107,7 +140,9 @@ func (d *DefaultKubeDeployer) DeployGateway(ctx context.Context, force bool) err
 		return fmt.Errorf("timeout waiting for Envoy Gateway rollout: %w (%s)", err, string(out))
 	}
 
-	// 2. Deploy Envoy AI Gateway CRDs
+	// 2. Deploy Envoy AI Gateway CRDs (wait for any terminating CRDs so Helm SSA never patches a deleting object)
+	d.waitForTerminatingCRDs(ctx, requiredAIGatewayCRDs)
+
 	out, err = d.CommandRunner(ctx, nil, "helm", "upgrade", "-i", "aieg-crd", "oci://docker.io/envoyproxy/ai-gateway-crds-helm",
 		"--version", d.AIGatewayVersion,
 		"--namespace", "envoy-ai-gateway-system",
@@ -115,6 +150,10 @@ func (d *DefaultKubeDeployer) DeployGateway(ctx context.Context, force bool) err
 		"--force-conflicts")
 	if err != nil {
 		return fmt.Errorf("failed to deploy Envoy AI Gateway CRDs: %w (%s)", err, string(out))
+	}
+
+	if err := d.waitForAIGatewayCRDsEstablished(ctx, "60s"); err != nil {
+		return err
 	}
 
 	// 3. Deploy Envoy AI Gateway Controller
@@ -135,6 +174,178 @@ func (d *DefaultKubeDeployer) DeployGateway(ctx context.Context, force bool) err
 	}
 
 	return nil
+}
+
+// DeployGatewayDataPlane deploys the GatewayClass, EnvoyProxy, and Gateway listener resources.
+func (d *DefaultKubeDeployer) DeployGatewayDataPlane(ctx context.Context, opts GatewayDataPlaneOptions) error {
+	gwName, gwNS, gwPort, svcType := normalizeGatewayDataPlaneOpts(opts)
+
+	if !opts.Force {
+		if _, gwErr := d.CommandRunner(ctx, nil, "kubectl", "get", "gateway", gwName, "-n", gwNS); gwErr == nil {
+			svcOut, svcErr := d.CommandRunner(ctx, nil, "kubectl", "get", "svc", "-n", "envoy-gateway-system",
+				"-l", fmt.Sprintf("gateway.envoyproxy.io/owning-gateway-name=%s", gwName),
+				"-o", "jsonpath={.items[0].metadata.name}")
+			if svcErr == nil && strings.TrimSpace(string(svcOut)) != "" {
+				return nil
+			}
+		}
+	}
+
+	rawYAML, err := manifests.GetEnvoyGatewayManifest(opts.DiskManifestPath)
+	if err != nil {
+		return fmt.Errorf("failed to load EnvoyGateway manifest: %w", err)
+	}
+
+	rendered := manifests.RenderManifest(rawYAML, map[string]string{
+		"GATEWAY_NAME":         gwName,
+		"GATEWAY_NAMESPACE":    gwNS,
+		"GATEWAY_PORT":         strconv.Itoa(gwPort),
+		"GATEWAY_SERVICE_TYPE": svcType,
+	})
+
+	if out, err := d.CommandRunner(ctx, []byte(rendered), "kubectl", "apply", "-f", "-"); err != nil {
+		return fmt.Errorf("failed to apply Gateway data-plane manifest: %w (%s)", err, string(out))
+	}
+
+	return d.waitForEnvoyDataPlane(ctx, gwName)
+}
+
+func (d *DefaultKubeDeployer) waitForEnvoyDataPlane(ctx context.Context, gwName string) error {
+	label := fmt.Sprintf("gateway.envoyproxy.io/owning-gateway-name=%s", gwName)
+	var deployName string
+	for attempt := 0; attempt < 30; attempt++ {
+		out, err := d.CommandRunner(ctx, nil, "kubectl", "get", "deployment", "-n", "envoy-gateway-system",
+			"-l", label, "-o", "jsonpath={.items[0].metadata.name}")
+		if err == nil && strings.TrimSpace(string(out)) != "" {
+			deployName = strings.TrimSpace(string(out))
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	if deployName == "" {
+		return fmt.Errorf("timed out waiting for Envoy proxy Deployment for gateway '%s'", gwName)
+	}
+
+	out, err := d.CommandRunner(ctx, nil, "kubectl", "-n", "envoy-gateway-system", "wait",
+		"--for=condition=Available", "deployment/"+deployName, "--timeout=120s")
+	if err != nil {
+		return fmt.Errorf("timeout waiting for Envoy proxy deployment '%s': %w (%s)", deployName, err, string(out))
+	}
+	return nil
+}
+
+// RemoveGatewayDataPlane deletes the Gateway and EnvoyProxy resources for the configured Gateway.
+func (d *DefaultKubeDeployer) RemoveGatewayDataPlane(ctx context.Context, opts GatewayDataPlaneOptions) error {
+	gwName, gwNS, _, _ := normalizeGatewayDataPlaneOpts(opts)
+	if out, err := d.CommandRunner(ctx, nil, "kubectl", "delete", "gateway", gwName, "-n", gwNS, "--ignore-not-found=true"); err != nil {
+		return fmt.Errorf("failed to delete Gateway %s/%s: %w (%s)", gwNS, gwName, err, string(out))
+	}
+	if out, err := d.CommandRunner(ctx, nil, "kubectl", "delete", "envoyproxy", gwName+"-proxy-config", "-n", gwNS, "--ignore-not-found=true"); err != nil {
+		return fmt.Errorf("failed to delete EnvoyProxy %s-proxy-config: %w (%s)", gwName, err, string(out))
+	}
+	return nil
+}
+
+// ConnectModelRoute creates or updates Backend, AIServiceBackend, and AIGatewayRoute for a model.
+func (d *DefaultKubeDeployer) ConnectModelRoute(ctx context.Context, opts ModelRouteOptions) error {
+	norm := normalizeModelRouteOpts(opts)
+	if norm.ModelName == "" {
+		return fmt.Errorf("model name is required")
+	}
+
+	rawYAML, err := manifests.GetAIGatewayRouteManifest(norm.DiskManifestPath)
+	if err != nil {
+		return fmt.Errorf("failed to load AIGatewayRoute manifest: %w", err)
+	}
+
+	rendered := manifests.RenderManifest(rawYAML, map[string]string{
+		"NAMESPACE":               norm.Namespace,
+		"MODEL_NAME":              norm.ModelName,
+		"GATEWAY_NAME":            norm.GatewayName,
+		"GATEWAY_NAMESPACE":       norm.GatewayNamespace,
+		"BACKEND_NAME":            norm.ModelName + "-eg-backend",
+		"AI_SERVICE_BACKEND_NAME": norm.ModelName + "-backend",
+		"ROUTE_NAME":              norm.ModelName + "-ai-route",
+		"ROUTE_RULE_NAME":         norm.ModelName + "-inference-rule",
+		"TARGET_BACKEND_HOST":     norm.TargetBackendHost,
+		"TARGET_BACKEND_PORT":     strconv.Itoa(norm.TargetBackendPort),
+	})
+
+	if out, err := d.CommandRunner(ctx, []byte(rendered), "kubectl", "apply", "-f", "-"); err != nil {
+		outStr := string(out)
+		if isMissingAIGatewayCRDError(outStr) {
+			return fmt.Errorf("failed to apply AIGatewayRoute manifest for '%s': %w (%s) — Envoy AI Gateway CRDs are missing; run 'oscar-im init --force' (or './scripts/production/deploy-gateway.sh') to restore them", norm.ModelName, err, outStr)
+		}
+		return fmt.Errorf("failed to apply AIGatewayRoute manifest for '%s': %w (%s)", norm.ModelName, err, outStr)
+	}
+	return nil
+}
+
+// DisconnectModelRoute removes Backend, AIServiceBackend, and AIGatewayRoute for a model.
+func (d *DefaultKubeDeployer) DisconnectModelRoute(ctx context.Context, opts ModelRouteOptions) error {
+	norm := normalizeModelRouteOpts(opts)
+	if norm.ModelName == "" {
+		return fmt.Errorf("model name is required")
+	}
+
+	resources := []struct {
+		kind string
+		name string
+	}{
+		{"aigatewayroute", norm.ModelName + "-ai-route"},
+		{"aiservicebackend", norm.ModelName + "-backend"},
+		{"backend", norm.ModelName + "-eg-backend"},
+	}
+	for _, res := range resources {
+		out, err := d.CommandRunner(ctx, nil, "kubectl", "delete", res.kind, res.name, "-n", norm.Namespace, "--ignore-not-found=true")
+		if err != nil {
+			return fmt.Errorf("failed to delete %s %s: %w (%s)", res.kind, res.name, err, string(out))
+		}
+	}
+	return nil
+}
+
+func normalizeGatewayDataPlaneOpts(opts GatewayDataPlaneOptions) (name, ns string, port int, svcType string) {
+	name = opts.GatewayName
+	if name == "" {
+		name = "envoy-ai-gateway"
+	}
+	ns = opts.GatewayNamespace
+	if ns == "" {
+		ns = "oscar-svc"
+	}
+	port = opts.GatewayPort
+	if port <= 0 {
+		port = 8080
+	}
+	svcType = opts.GatewayServiceType
+	if svcType == "" {
+		svcType = "NodePort"
+	}
+	return name, ns, port, svcType
+}
+
+func normalizeModelRouteOpts(opts ModelRouteOptions) ModelRouteOptions {
+	if opts.Namespace == "" {
+		opts.Namespace = "oscar-svc"
+	}
+	if opts.GatewayName == "" {
+		opts.GatewayName = "envoy-ai-gateway"
+	}
+	if opts.GatewayNamespace == "" {
+		opts.GatewayNamespace = opts.Namespace
+	}
+	if opts.TargetBackendHost == "" && opts.ModelName != "" {
+		opts.TargetBackendHost = fmt.Sprintf("%s-kserve-workload-svc.%s.svc.cluster.local", opts.ModelName, opts.Namespace)
+	}
+	if opts.TargetBackendPort <= 0 {
+		opts.TargetBackendPort = 8000
+	}
+	return opts
 }
 
 // DeployEPP deploys the Endpoint Picker Deployment, Service, and RBAC using embedded or overridden manifests.
@@ -302,8 +513,14 @@ func (d *DefaultKubeDeployer) RemoveGateway(ctx context.Context) error {
 		for _, rel := range releases {
 			statusOut, statusErr := d.CommandRunner(ctx, nil, "helm", "status", rel.name, "-n", rel.namespace)
 			if statusErr == nil && !strings.Contains(strings.ToLower(string(statusOut)), "not found") {
-				_, _ = d.CommandRunner(ctx, nil, "helm", "uninstall", rel.name, "-n", rel.namespace)
+				_, _ = d.CommandRunner(ctx, nil, "helm", "uninstall", rel.name, "-n", rel.namespace, "--wait")
 			}
+		}
+	}
+
+	for _, crd := range requiredAIGatewayCRDs {
+		if _, err := d.CommandRunner(ctx, nil, "kubectl", "get", "crd", crd); err == nil {
+			_, _ = d.CommandRunner(ctx, nil, "kubectl", "wait", "--for=delete", "crd/"+crd, "--timeout=60s")
 		}
 	}
 
@@ -323,4 +540,36 @@ func (d *DefaultKubeDeployer) isBackendAPIEnabled(ctx context.Context) bool {
 	out, err := d.CommandRunner(ctx, nil, "kubectl", "-n", "envoy-gateway-system", "get", "configmap",
 		"envoy-gateway-config", "-o", "jsonpath={.data.envoy-gateway\\.yaml}")
 	return err == nil && strings.Contains(string(out), "enableBackend: true")
+}
+
+func (d *DefaultKubeDeployer) areAIGatewayCRDsEstablished(ctx context.Context) bool {
+	return d.waitForAIGatewayCRDsEstablished(ctx, "1s") == nil
+}
+
+func (d *DefaultKubeDeployer) waitForAIGatewayCRDsEstablished(ctx context.Context, timeout string) error {
+	args := []string{"wait", "--for=condition=Established"}
+	for _, crd := range requiredAIGatewayCRDs {
+		args = append(args, "crd/"+crd)
+	}
+	args = append(args, "--timeout="+timeout)
+	out, err := d.CommandRunner(ctx, nil, "kubectl", args...)
+	if err != nil {
+		return fmt.Errorf("Envoy AI Gateway CRDs are not Established: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (d *DefaultKubeDeployer) waitForTerminatingCRDs(ctx context.Context, crds []string) {
+	for _, crd := range crds {
+		out, err := d.CommandRunner(ctx, nil, "kubectl", "get", "crd", crd, "-o", "jsonpath={.metadata.deletionTimestamp}")
+		if err == nil && strings.TrimSpace(string(out)) != "" {
+			_, _ = d.CommandRunner(ctx, nil, "kubectl", "wait", "--for=delete", "crd/"+crd, "--timeout=60s")
+		}
+	}
+}
+
+func isMissingAIGatewayCRDError(out string) bool {
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "could not find the requested resource") &&
+		(strings.Contains(lower, "aigatewayroutes") || strings.Contains(lower, "aiservicebackends"))
 }

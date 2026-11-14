@@ -17,7 +17,9 @@ type Settings struct {
 	Namespace                 string        `json:"namespace"`
 	DefaultBackendFQDN        string        `json:"default_backend_fqdn"`
 	DefaultBackendPort        int           `json:"default_backend_port"`
+	RoutingMode               string        `json:"routing_mode"`
 	MetricsScrapeTimeout      time.Duration `json:"metrics_scrape_timeout"`
+	MetricsMaxAge             time.Duration `json:"metrics_max_age"`
 	WorkerWaitTimeout         time.Duration `json:"worker_wait_timeout"`
 	OscarEndpoint             string        `json:"oscar_endpoint"`
 	OscarClusterID            string        `json:"oscar_cluster_id"`
@@ -79,6 +81,8 @@ func FromEnv() Settings {
 	)
 
 	timeoutSec := envFloatOrDefault("EPP_METRICS_TIMEOUT_SEC", 1.5)
+	metricsMaxAgeSec := envFloatOrDefault("EPP_METRICS_MAX_AGE_SEC", 10.0)
+	routingMode := envOrDefault("EPP_ROUTING_MODE", "composite_score")
 
 	return Settings{
 		HTTPHost:                  envOrDefault("EPP_HTTP_HOST", "0.0.0.0"),
@@ -88,7 +92,9 @@ func FromEnv() Settings {
 		Namespace:                 namespace,
 		DefaultBackendFQDN:        defaultFQDN,
 		DefaultBackendPort:        envIntOrDefault("EPP_DEFAULT_BACKEND_PORT", 8000),
+		RoutingMode:               routingMode,
 		MetricsScrapeTimeout:      time.Duration(timeoutSec * float64(time.Second)),
+		MetricsMaxAge:             time.Duration(metricsMaxAgeSec * float64(time.Second)),
 		WorkerWaitTimeout:         time.Duration(envIntOrDefault("EPP_WORKER_WAIT_TIMEOUT_SEC", workerWaitTimeout)) * time.Second,
 		OscarEndpoint:             envOrDefault("OSCAR_ENDPOINT", oscarEndpoint),
 		OscarClusterID:            envOrDefault("OSCAR_CLUSTER_ID", oscarClusterID),

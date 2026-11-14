@@ -4,15 +4,15 @@ This package provides the central command-line interface tool (`oscar-im`) for o
 
 ## Files
 
-| File                                                                                 | Type      | Description                                                                                                                                             |
-| :----------------------------------------------------------------------------------- | :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`main.go`](file:///home/marc/Projects/oscar-inferencemesh/src/cmd/oscar-im/main.go) | Go Source | CLI entrypoint implementing `init`, `remove`, `restart`, and `config` commands, supporting standalone embedded execution and modular script delegation. |
+| File                                                                                 | Type      | Description                                                                                                                                                                                                         |
+| :----------------------------------------------------------------------------------- | :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`main.go`](file:///home/marc/Projects/oscar-inferencemesh/src/cmd/oscar-im/main.go) | Go Source | CLI entrypoint implementing `init`, `model` (`add`/`remove`/`list`), `status` (`info`/`check`), `remove`, `restart`, and `config` commands, supporting standalone embedded execution and modular script delegation. |
 
 ## Commands
 
 ### `init`
 
-Initializes and configures the Envoy AI Gateway, the Endpoint Picker, and the `EnvoyExtensionPolicy` (`ext_proc` gRPC filter). Automatically pulls defaults and active cluster from persistent configuration (`~/.config/oscar-im/config.yaml`).
+Initializes and configures the Envoy AI Gateway (Helm controllers + `Gateway` data plane on `:8080`), the Endpoint Picker, and the `EnvoyExtensionPolicy` (`ext_proc` gRPC filter). Automatically pulls defaults and active cluster from persistent configuration (`~/.config/oscar-im/config.yaml`).
 
 ```bash
 # Direct host mode (default): prepares the gateway and runs EPP on your machine
@@ -29,6 +29,34 @@ oscar-im init --docker --force
 
 # Retain gateway / skip gateway deployment:
 oscar-im init --docker --skip-gateway
+```
+
+### `model` (`add` / `remove` / `list`)
+
+Manually connects or disconnects a model deployed in OSCAR/KServe (`Backend`, `AIServiceBackend`, and `AIGatewayRoute`) to the Envoy Gateway.
+
+```bash
+# Connect a deployed model (exposes POST /v1/chat/completions with header x-ai-eg-model)
+oscar-im model add qwen2-5-05b-instruct
+
+# List connected and unconnected OSCAR/KServe models
+oscar-im model list
+
+# Disconnect a model route and backend resources
+oscar-im model remove qwen2-5-05b-instruct
+```
+
+### `status` (aliases: `info`, `check`)
+
+Inspects the deployed mesh stack across Kubernetes, OSCAR control plane, KServe `LLMInferenceService`, worker pods & EPP endpoint discovery, Envoy Gateway / `AIGatewayRoute` / `EnvoyExtensionPolicy`, and EPP `/verify`, flagging missing components or failing links.
+
+```bash
+# Human-readable diagnostic report
+oscar-im status
+
+# Aliases and JSON output
+oscar-im info
+oscar-im check --json
 ```
 
 ### `remove`

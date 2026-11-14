@@ -17,34 +17,52 @@ import (
 	"github.com/grycap/oscar-inferencemesh/src/internal/domain"
 )
 
-// EndpointDiscoveryAdapter discovers running vLLM worker pods in the Kubernetes cluster.
+const serviceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+// EndpointDiscoveryAdapter discovers ready vLLM worker pods in the Kubernetes cluster.
 type EndpointDiscoveryAdapter struct {
-	settings config.Settings
+	settings       config.Settings
+	readToken      func() ([]byte, error)
+	inClusterFetch func(ctx context.Context, url, token string) ([]byte, error)
+	kubectlFetch   func(ctx context.Context, namespace string) ([]byte, error)
 }
 
 // NewEndpointDiscoveryAdapter creates a new Kubernetes EndpointDiscoveryAdapter.
 func NewEndpointDiscoveryAdapter(settings config.Settings) *EndpointDiscoveryAdapter {
-	return &EndpointDiscoveryAdapter{settings: settings}
+	adapter := &EndpointDiscoveryAdapter{
+		settings: settings,
+		readToken: func() ([]byte, error) {
+			return os.ReadFile(serviceAccountTokenPath)
+		},
+	}
+	adapter.inClusterFetch = adapter.defaultInClusterFetch
+	adapter.kubectlFetch = adapter.defaultKubectlFetch
+	return adapter
 }
 
 type k8sPodList struct {
-	Items []struct {
-		Metadata struct {
-			Name   string            `json:"name"`
-			Labels map[string]string `json:"labels"`
-		} `json:"metadata"`
-		Status struct {
-			Phase      string `json:"phase"`
-			PodIP      string `json:"podIP"`
-			Conditions []struct {
-				Type   string `json:"type"`
-				Status string `json:"status"`
-			} `json:"conditions"`
-		} `json:"status"`
-	} `json:"items"`
+	Items []k8sPodItem `json:"items"`
 }
 
-// ListEndpoints queries Kubernetes for running vLLM worker pods, falling back to the default Service FQDN.
+type k8sPodItem struct {
+	Metadata struct {
+		Name              string            `json:"name"`
+		DeletionTimestamp string            `json:"deletionTimestamp,omitempty"`
+		Labels            map[string]string `json:"labels"`
+	} `json:"metadata"`
+	Status struct {
+		Phase      string            `json:"phase"`
+		PodIP      string            `json:"podIP"`
+		Conditions []k8sPodCondition `json:"conditions"`
+	} `json:"status"`
+}
+
+type k8sPodCondition struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
+}
+
+// ListEndpoints queries Kubernetes for ready vLLM worker pods matching the target model.
 func (a *EndpointDiscoveryAdapter) ListEndpoints(
 	ctx context.Context,
 	modelName string,
@@ -54,36 +72,36 @@ func (a *EndpointDiscoveryAdapter) ListEndpoints(
 		targetModel = a.settings.ModelName
 	}
 
-	// 1. Try discovering via in-cluster service account token if running inside a Pod
-	discovered := a.discoverViaInCluster(ctx, targetModel)
-	if len(discovered) > 0 {
-		return discovered, nil
+	// 1. If running inside a Kubernetes Pod, query the API server using the mounted ServiceAccount token.
+	if tokenBytes, err := a.readToken(); err == nil {
+		token := strings.TrimSpace(string(tokenBytes))
+		if token != "" {
+			url := fmt.Sprintf("https://kubernetes.default.svc/api/v1/namespaces/%s/pods", a.settings.Namespace)
+			data, err := a.inClusterFetch(ctx, url, token)
+			if err != nil {
+				return nil, fmt.Errorf("in-cluster pod discovery failed: %w", err)
+			}
+			return a.parsePodsJSON(data, targetModel)
+		}
 	}
 
-	// 2. Try discovering via kubectl if running on host/developer machine
-	discovered = a.discoverViaKubectl(ctx, targetModel)
-	if len(discovered) > 0 {
-		return discovered, nil
+	// 2. Otherwise (host/developer machine), query via kubectl.
+	data, err := a.kubectlFetch(ctx, a.settings.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("kubectl pod discovery failed: %w", err)
 	}
-
-	return nil, nil
+	return a.parsePodsJSON(data, targetModel)
 }
 
-func (a *EndpointDiscoveryAdapter) discoverViaInCluster(
+func (a *EndpointDiscoveryAdapter) defaultInClusterFetch(
 	ctx context.Context,
-	modelName string,
-) []domain.WorkerEndpoint {
-	tokenBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
-	if err != nil || len(tokenBytes) == 0 {
-		return nil
-	}
-
-	url := fmt.Sprintf("https://kubernetes.default.svc/api/v1/namespaces/%s/pods", a.settings.Namespace)
+	url, token string,
+) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+string(tokenBytes))
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	tr := &http.Transport{
 		// TODO(RB-01): Trust the mounted service-account CA and verify the API server certificate instead of bypassing TLS verification.
@@ -92,24 +110,22 @@ func (a *EndpointDiscoveryAdapter) discoverViaInCluster(
 	client := &http.Client{Transport: tr, Timeout: 3 * time.Second}
 
 	resp, err := client.Do(req)
-	// TODO(RB-01): Close any received response body on non-OK status too; the current early return skips cleanup.
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return nil
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
-	if err != nil {
-		return nil
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("kubernetes API returned HTTP %d", resp.StatusCode)
 	}
 
-	return a.parsePodsJSON(bodyBytes, modelName)
+	return io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 }
 
-func (a *EndpointDiscoveryAdapter) discoverViaKubectl(
+func (a *EndpointDiscoveryAdapter) defaultKubectlFetch(
 	ctx context.Context,
-	modelName string,
-) []domain.WorkerEndpoint {
+	namespace string,
+) ([]byte, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -119,59 +135,104 @@ func (a *EndpointDiscoveryAdapter) discoverViaKubectl(
 		"get",
 		"pods",
 		"-n",
-		a.settings.Namespace,
+		namespace,
 		"-o",
 		"json",
 	)
 	out, err := cmd.Output()
-	if err != nil || len(out) == 0 {
-		return nil
+	if err != nil {
+		return nil, err
 	}
-
-	return a.parsePodsJSON(out, modelName)
+	return out, nil
 }
 
 func (a *EndpointDiscoveryAdapter) parsePodsJSON(
 	data []byte,
 	modelName string,
-) []domain.WorkerEndpoint {
+) ([]domain.WorkerEndpoint, error) {
 	var podList k8sPodList
 	if err := json.Unmarshal(data, &podList); err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to unmarshal pod list: %w", err)
 	}
 
 	var endpoints []domain.WorkerEndpoint
 	for _, item := range podList.Items {
-		podName := item.Metadata.Name
-		// TODO(FG-03): Match explicit workload/model labels rather than pod-name substrings;
-		// test similarly named models and non-worker pods.
-		if !strings.Contains(podName, modelName) || strings.Contains(podName, "router-scheduler") {
+		if item.Metadata.DeletionTimestamp != "" {
+			continue
+		}
+		if !isMatchingWorkerPod(item.Metadata.Name, item.Metadata.Labels, modelName) {
 			continue
 		}
 		if item.Status.Phase != "Running" || item.Status.PodIP == "" {
 			continue
 		}
-
-		isReady := false
-		for _, cond := range item.Status.Conditions {
-			if cond.Type == "Ready" && cond.Status == "True" {
-				isReady = true
-				break
-			}
+		if !hasPodReadyCondition(item.Status.Conditions) {
+			continue
 		}
 
-		// TODO(FG-03): Exclude non-ready workers from routing candidates (or separate lifecycle observations);
-		// Running alone is insufficient, especially while the model is loading.
 		endpoints = append(endpoints, domain.WorkerEndpoint{
-			Name:      podName,
+			Name:      item.Metadata.Name,
 			Address:   item.Status.PodIP,
 			Port:      a.settings.DefaultBackendPort,
 			Namespace: a.settings.Namespace,
 			ModelName: modelName,
-			Ready:     isReady,
+			Ready:     true,
 			Labels:    item.Metadata.Labels,
 		})
 	}
 
-	return endpoints
+	return endpoints, nil
+}
+
+func hasPodReadyCondition(conditions []k8sPodCondition) bool {
+	for _, cond := range conditions {
+		if cond.Type == "Ready" && cond.Status == "True" {
+			return true
+		}
+	}
+	return false
+}
+
+// isMatchingWorkerPod verifies via explicit workload and model labels that a pod is a
+// worker serving modelName, rejecting non-worker control-plane pods and similarly named models.
+func isMatchingWorkerPod(podName string, labels map[string]string, modelName string) bool {
+	if len(labels) == 0 || modelName == "" {
+		return false
+	}
+
+	// Exclude control-plane, router-scheduler, and EPP pods explicitly.
+	appComp := labels["app.kubernetes.io/component"]
+	kserveComp := labels["kserve.io/component"]
+	if appComp == "llminferenceservice-router-scheduler" ||
+		kserveComp == "router-scheduler" ||
+		labels["app.kubernetes.io/name"] == "oscar-inferencemesh-epp" ||
+		labels["app.kubernetes.io/part-of"] == "oscar-inferencemesh" ||
+		strings.Contains(podName, "router-scheduler") {
+		return false
+	}
+
+	// If a workload component label is present, require it to denote an inference worker.
+	if kserveComp != "" && kserveComp != "workload" && kserveComp != "predictor" {
+		return false
+	}
+	if appComp != "" &&
+		appComp != "llminferenceservice-workload" &&
+		appComp != "workload" &&
+		appComp != "predictor" {
+		return false
+	}
+
+	// Match model identity strictly by explicit label equality (never pod-name substrings).
+	modelLabels := []string{
+		"app.kubernetes.io/name",
+		"serving.kserve.io/inferenceservice",
+		"model",
+		"oscar-app",
+	}
+	for _, key := range modelLabels {
+		if labels[key] == modelName {
+			return true
+		}
+	}
+	return false
 }

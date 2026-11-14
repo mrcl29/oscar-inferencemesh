@@ -294,12 +294,157 @@ func TestRemoveGateway(t *testing.T) {
 	}
 
 	hasNamespaceDelete := false
+	hasWaitUninstall := false
+	hasCRDDeleteWait := false
 	for _, cmd := range executed {
 		if strings.Contains(cmd, "delete namespace envoy-gateway-system") {
 			hasNamespaceDelete = true
 		}
+		if strings.Contains(cmd, "helm uninstall aieg-crd") && strings.Contains(cmd, "--wait") {
+			hasWaitUninstall = true
+		}
+		if strings.Contains(cmd, "wait --for=delete crd/aigatewayroutes.aigateway.envoyproxy.io") {
+			hasCRDDeleteWait = true
+		}
 	}
-	if !hasNamespaceDelete {
-		t.Fatal("expected namespace deletion for envoy-gateway-system")
+	if !hasNamespaceDelete || !hasWaitUninstall || !hasCRDDeleteWait {
+		t.Fatalf("expected namespace deletion, --wait uninstall, and CRD delete wait; got=%v", executed)
+	}
+}
+
+func TestDeployGatewayDataPlane_AppliesAndWaits(t *testing.T) {
+	var appliedYAML string
+	var waitedDeployment bool
+	deployer := &DefaultKubeDeployer{
+		CommandRunner: func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+			cmd := name + " " + strings.Join(args, " ")
+			switch {
+			case strings.Contains(cmd, "get gateway "):
+				return nil, context.DeadlineExceeded
+			case strings.Contains(cmd, "apply -f -"):
+				appliedYAML = string(stdin)
+			case strings.Contains(cmd, "get deployment -n envoy-gateway-system"):
+				return []byte("envoy-oscar-svc-envoy-ai-gateway-123"), nil
+			case strings.Contains(cmd, "wait --for=condition=Available deployment/envoy-oscar-svc-envoy-ai-gateway-123"):
+				waitedDeployment = true
+			}
+			return []byte("ok"), nil
+		},
+	}
+
+	err := deployer.DeployGatewayDataPlane(context.Background(), GatewayDataPlaneOptions{
+		GatewayNamespace: "oscar-svc",
+		GatewayPort:      8080,
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+	if !strings.Contains(appliedYAML, "name: envoy-ai-gateway") || !strings.Contains(appliedYAML, "port: 8080") {
+		t.Fatalf("unexpected rendered Gateway YAML:\n%s", appliedYAML)
+	}
+	if !waitedDeployment {
+		t.Fatal("expected wait for Envoy proxy deployment Available condition")
+	}
+}
+
+func TestConnectAndDisconnectModelRoute(t *testing.T) {
+	var appliedYAML string
+	var deleted []string
+	deployer := &DefaultKubeDeployer{
+		CommandRunner: func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+			cmd := name + " " + strings.Join(args, " ")
+			if strings.Contains(cmd, "apply -f -") {
+				appliedYAML = string(stdin)
+			}
+			if strings.Contains(cmd, "delete ") {
+				deleted = append(deleted, cmd)
+			}
+			return []byte("ok"), nil
+		},
+	}
+
+	err := deployer.ConnectModelRoute(context.Background(), ModelRouteOptions{
+		Namespace: "oscar-svc",
+		ModelName: "qwen2-5-05b-instruct",
+	})
+	if err != nil {
+		t.Fatalf("ConnectModelRoute failed: %v", err)
+	}
+	if !strings.Contains(appliedYAML, "hostname: qwen2-5-05b-instruct-kserve-workload-svc.oscar-svc.svc.cluster.local") ||
+		!strings.Contains(appliedYAML, "value: qwen2-5-05b-instruct") {
+		t.Fatalf("unexpected rendered route YAML:\n%s", appliedYAML)
+	}
+
+	if err := deployer.DisconnectModelRoute(context.Background(), ModelRouteOptions{
+		Namespace: "oscar-svc",
+		ModelName: "qwen2-5-05b-instruct",
+	}); err != nil {
+		t.Fatalf("DisconnectModelRoute failed: %v", err)
+	}
+	if len(deleted) != 3 {
+		t.Fatalf("expected 3 deleted resources, got %d (%v)", len(deleted), deleted)
+	}
+}
+
+func TestDeployGateway_RepairsMissingAIGatewayCRDs(t *testing.T) {
+	var commands []string
+	deployer := &DefaultKubeDeployer{
+		CommandRunner: func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+			cmdStr := name + " " + strings.Join(args, " ")
+			commands = append(commands, cmdStr)
+			switch {
+			case strings.Contains(cmdStr, "wait --for=condition=Available"):
+				return []byte("condition met"), nil
+			case strings.Contains(cmdStr, "get configmap envoy-gateway-config"):
+				return []byte("enableBackend: true"), nil
+			case strings.Contains(cmdStr, "wait --for=condition=Established") && strings.Contains(cmdStr, "--timeout=1s"):
+				return []byte("not found"), context.DeadlineExceeded
+			case strings.Contains(cmdStr, "get crd ") && strings.Contains(cmdStr, "deletionTimestamp"):
+				return []byte("2026-11-14T20:27:00Z"), nil
+			default:
+				return []byte("ok"), nil
+			}
+		},
+		EnvoyGatewayVersion: "1.9.3",
+		AIGatewayVersion:    "1.2.0",
+	}
+
+	if err := deployer.DeployGateway(context.Background(), false); err != nil {
+		t.Fatalf("expected DeployGateway to repair missing CRDs cleanly, got: %v", err)
+	}
+
+	var waitedDelete, ranCRDHelm, waitedEstablished bool
+	for _, cmd := range commands {
+		if strings.Contains(cmd, "wait --for=delete crd/aigatewayroutes.aigateway.envoyproxy.io") {
+			waitedDelete = true
+		}
+		if strings.Contains(cmd, "helm upgrade -i aieg-crd") {
+			ranCRDHelm = true
+		}
+		if strings.Contains(cmd, "wait --for=condition=Established") && strings.Contains(cmd, "--timeout=60s") {
+			waitedEstablished = true
+		}
+	}
+	if !waitedDelete || !ranCRDHelm || !waitedEstablished {
+		t.Fatalf("expected terminating CRD wait, aieg-crd helm install, and 60s Established wait; cmds=%v", commands)
+	}
+}
+
+func TestConnectModelRoute_MissingCRDHint(t *testing.T) {
+	deployer := &DefaultKubeDeployer{
+		CommandRunner: func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+			return []byte(`Error from server (NotFound): error when creating "STDIN": the server could not find the requested resource (post aigatewayroutes.aigateway.envoyproxy.io)`), context.DeadlineExceeded
+		},
+	}
+
+	err := deployer.ConnectModelRoute(context.Background(), ModelRouteOptions{
+		Namespace: "oscar-svc",
+		ModelName: "qwen2-5-05b-instruct",
+	})
+	if err == nil {
+		t.Fatal("expected error when CRDs are missing")
+	}
+	if !strings.Contains(err.Error(), "oscar-im init --force") {
+		t.Fatalf("expected actionable recovery hint in error, got: %v", err)
 	}
 }

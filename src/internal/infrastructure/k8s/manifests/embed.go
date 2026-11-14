@@ -15,6 +15,10 @@ const (
 	EPPDeploymentFilename = "epp-deployment.yaml"
 	// EnvoyExtensionPolicyFilename is the embedded filename for the EnvoyExtensionPolicy resource.
 	EnvoyExtensionPolicyFilename = "envoy-extension-policy.yaml"
+	// EnvoyGatewayFilename is the embedded filename for the EnvoyProxy, GatewayClass, and Gateway resources.
+	EnvoyGatewayFilename = "envoy-ai-gateway.yaml"
+	// AIGatewayRouteFilename is the embedded filename for Backend, AIServiceBackend, and AIGatewayRoute.
+	AIGatewayRouteFilename = "aigateway-route.yaml"
 )
 
 // GetManifest retrieves the manifest by filename. If diskOverridePath is provided and
@@ -41,6 +45,16 @@ func GetEPPDeploymentManifest(diskOverridePath string) ([]byte, error) {
 // GetEnvoyExtensionPolicyManifest returns the EnvoyExtensionPolicy manifest, prioritizing disk if present.
 func GetEnvoyExtensionPolicyManifest(diskOverridePath string) ([]byte, error) {
 	return GetManifest(EnvoyExtensionPolicyFilename, diskOverridePath)
+}
+
+// GetEnvoyGatewayManifest returns the Gateway data-plane manifest, prioritizing disk if present.
+func GetEnvoyGatewayManifest(diskOverridePath string) ([]byte, error) {
+	return GetManifest(EnvoyGatewayFilename, diskOverridePath)
+}
+
+// GetAIGatewayRouteManifest returns the AIGatewayRoute/Backend manifest, prioritizing disk if present.
+func GetAIGatewayRouteManifest(diskOverridePath string) ([]byte, error) {
+	return GetManifest(AIGatewayRouteFilename, diskOverridePath)
 }
 
 // RenderManifest substitutes ${VAR} or $VAR in the template bytes using the provided dictionary.

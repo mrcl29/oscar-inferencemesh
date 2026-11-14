@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -136,6 +137,16 @@ func (s *GrpcExtProcServer) handleRequestHeaders(
 				ImmediateResponse: &extprocv3.ImmediateResponse{
 					Status: &typev3.HttpStatus{Code: typev3.StatusCode_ServiceUnavailable},
 					Body:   []byte("no ready inference workers available"),
+				},
+			},
+		}
+	}
+	if strings.HasPrefix(decision.Reason, "discovery_error:") {
+		return &extprocv3.ProcessingResponse{
+			Response: &extprocv3.ProcessingResponse_ImmediateResponse{
+				ImmediateResponse: &extprocv3.ImmediateResponse{
+					Status: &typev3.HttpStatus{Code: typev3.StatusCode_ServiceUnavailable},
+					Body:   []byte("inference endpoint discovery failed"),
 				},
 			},
 		}
