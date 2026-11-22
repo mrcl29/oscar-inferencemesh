@@ -193,6 +193,68 @@ func TestMeshInspectorReportsHealthyFullStack(t *testing.T) {
 	}
 }
 
+func TestMeshInspectorResolvesInferencePoolBackendTarget(t *testing.T) {
+	inspector := &MeshInspector{
+		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			joined := name + " " + strings.Join(args, " ")
+			switch {
+			case strings.Contains(joined, "get backends "):
+				return []byte(`{"items":[]}`), nil
+			case strings.Contains(joined, "get aiservicebackends "):
+				return []byte(`{"items":[]}`), nil
+			case strings.Contains(joined, "get inferencepools "):
+				return []byte(`{"items":[{"metadata":{"name":"qwen2-5-05b-instruct-pool"},"spec":{"targetPorts":[{"number":8000}],"endpointPickerRef":{"name":"oscar-inferencemesh-epp","port":{"number":9002}}}}]}`), nil
+			default:
+				return []byte(`{}`), nil
+			}
+		},
+	}
+
+	targets := inspector.resolveBackendTargets(context.Background(), "oscar-svc", nil)
+	got := targets["qwen2-5-05b-instruct-pool"]
+	want := "InferencePool/qwen2-5-05b-instruct-pool (port=8000, epp=oscar-inferencemesh-epp:9002)"
+	if got != want {
+		t.Fatalf("got InferencePool target %q, want %q", got, want)
+	}
+
+	report := &MeshStatusReport{
+		KubeConnected: true,
+		Oscar:         OscarStatusSection{Connected: true, TargetRegistered: true, RegisteredServices: []string{"qwen2-5-05b-instruct"}},
+		Workload: ModelWorkloadStatus{
+			LLMServiceExists:    true,
+			ReadyWorkerCount:    1,
+			TotalWorkerCount:    1,
+			DiscoveredEndpoints: []domain.WorkerEndpoint{{Name: "w1", Address: "10.244.0.62", Port: 8000, Ready: true}},
+		},
+		Gateway: GatewayStatusSection{
+			EnvoyControllerStatus:     "Available (1/1)",
+			AIGatewayControllerStatus: "Available (1/1)",
+			DataPlaneStatus:           "Available (1/1)",
+			TargetGatewayExists:       true,
+			GatewayNodePort30880:      "envoy-oscar-svc (8080 -> nodePort 30880)",
+			LocalGatewayPortOpen:      true,
+			AIGatewayRoutes:           []RouteSummary{{Name: "qwen-ai-route", Accepted: "True"}},
+			ExtensionPolicy:           ExtensionPolicySummary{Exists: false, Name: "envoy-ai-gateway-epp-ext-proc"},
+		},
+		ConnectedModels: []ConnectedModelSummary{
+			{ModelName: "qwen2-5-05b-instruct", RouteName: "qwen-ai-route", BackendTarget: want},
+		},
+		EPP: EPPStatusSection{
+			ReadyReplicas: 1, DesiredReplicas: 1, VerifyReachable: true,
+			Verify: func() *EPPVerifySnapshot {
+				v := &EPPVerifySnapshot{Mode: "composite_score"}
+				v.Autoscaler.OscarCluster.Connected = true
+				return v
+			}(),
+		},
+	}
+	for _, f := range buildDiagnosticFindings(StatusOptions{Namespace: "oscar-svc", GatewayPort: 8080, ExtensionPolicyName: "envoy-ai-gateway-epp-ext-proc"}, report) {
+		if f.Severity == SeverityFail || f.Severity == SeverityWarn {
+			t.Errorf("expected no FAIL/WARN findings for InferencePool without ExtensionPolicy, got %+v", f)
+		}
+	}
+}
+
 func TestMeshInspectorReportsMissingAIGatewayCRDs(t *testing.T) {
 	inspector := &MeshInspector{
 		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {

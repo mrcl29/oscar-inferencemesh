@@ -118,10 +118,11 @@ if [ "$k8s_ready" = false ]; then
     exit 1
 fi
 
-# Idempotency check: are both deployments running, Backend API enabled, and AI Gateway CRDs established?
+# Idempotency check: are both deployments running, Backend + InferencePool extensionManager enabled, and AI Gateway CRDs established?
 eg_ready=false
 aieg_ready=false
 backend_enabled=false
+inference_pool_enabled=false
 aigw_crds_ready=false
 
 if [ "${FORCE:-false}" != "true" ]; then
@@ -131,8 +132,12 @@ if [ "${FORCE:-false}" != "true" ]; then
     if kubectl -n envoy-ai-gateway-system wait --for=condition=Available deployment/ai-gateway-controller --timeout=1s &> /dev/null; then
         aieg_ready=true
     fi
-    if kubectl -n envoy-gateway-system get configmap envoy-gateway-config -o jsonpath='{.data.envoy-gateway\.yaml}' 2> /dev/null | grep -q "enableBackend: true"; then
+    eg_cfg=$(kubectl -n envoy-gateway-system get configmap envoy-gateway-config -o jsonpath='{.data.envoy-gateway\.yaml}' 2> /dev/null || true)
+    if echo "$eg_cfg" | grep -q "enableBackend: true"; then
         backend_enabled=true
+    fi
+    if echo "$eg_cfg" | grep -q "InferencePool" && echo "$eg_cfg" | grep -q "ai-gateway-controller"; then
+        inference_pool_enabled=true
     fi
     if kubectl wait --for=condition=Established \
         crd/aigatewayroutes.aigateway.envoyproxy.io \
@@ -141,21 +146,57 @@ if [ "${FORCE:-false}" != "true" ]; then
         aigw_crds_ready=true
     fi
 
-    if [ "$eg_ready" = true ] && [ "$aieg_ready" = true ] && [ "$backend_enabled" = true ] && [ "$aigw_crds_ready" = true ]; then
+    if [ "$eg_ready" = true ] && [ "$aieg_ready" = true ] && [ "$backend_enabled" = true ] && [ "$inference_pool_enabled" = true ] && [ "$aigw_crds_ready" = true ]; then
         log_info "Envoy Gateway and Envoy AI Gateway are already deployed, CRDs established, and Available. Skipping installation."
         exit 0
     fi
 fi
 
-# 1. Deploy Envoy Gateway
+# 1. Deploy Envoy Gateway (with Backend API + AI Gateway extensionManager + InferencePool v1)
 log_step "1. Deploying Envoy Gateway (v${ENVOY_GATEWAY_VERSION})..."
 helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm \
     --version "$ENVOY_GATEWAY_VERSION" \
     --namespace envoy-gateway-system \
     --create-namespace \
     --force-conflicts \
-    --set config.envoyGateway.extensionApis.enableBackend=true \
-    --set config.envoyGateway.extensionApis.enableEnvoyPatchPolicy=true
+    -f - << 'EOF'
+config:
+  envoyGateway:
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    logging:
+      level:
+        default: info
+    provider:
+      type: Kubernetes
+    extensionApis:
+      enableBackend: true
+      enableEnvoyPatchPolicy: true
+    extensionManager:
+      backendResources:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          version: v1
+      hooks:
+        xdsTranslator:
+          translation:
+            listener:
+              includeAll: true
+            route:
+              includeAll: true
+            cluster:
+              includeAll: true
+            secret:
+              includeAll: true
+          post:
+            - Translation
+            - Cluster
+            - Route
+      service:
+        fqdn:
+          hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+          port: 1063
+EOF
 
 log_info "Waiting for Envoy Gateway controller rollout..."
 kubectl -n envoy-gateway-system wait --for=condition=Available deployment/envoy-gateway --timeout=180s

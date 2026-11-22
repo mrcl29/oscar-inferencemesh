@@ -17,7 +17,7 @@ func TestDeployGateway_IdempotentSkip(t *testing.T) {
 				return []byte("deployment.apps/envoy-gateway condition met"), nil
 			}
 			if strings.Contains(cmdStr, "get configmap envoy-gateway-config") {
-				return []byte("enableBackend: true"), nil
+				return []byte("enableBackend: true\nInferencePool\nai-gateway-controller"), nil
 			}
 			return []byte("ok"), nil
 		},
@@ -370,7 +370,9 @@ func TestConnectAndDisconnectModelRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConnectModelRoute failed: %v", err)
 	}
-	if !strings.Contains(appliedYAML, "hostname: qwen2-5-05b-instruct-kserve-workload-svc.oscar-svc.svc.cluster.local") ||
+	if !strings.Contains(appliedYAML, "kind: InferencePool") ||
+		!strings.Contains(appliedYAML, "name: qwen2-5-05b-instruct-pool") ||
+		!strings.Contains(appliedYAML, "name: oscar-inferencemesh-epp") ||
 		!strings.Contains(appliedYAML, "value: qwen2-5-05b-instruct") {
 		t.Fatalf("unexpected rendered route YAML:\n%s", appliedYAML)
 	}
@@ -381,8 +383,37 @@ func TestConnectAndDisconnectModelRoute(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("DisconnectModelRoute failed: %v", err)
 	}
-	if len(deleted) != 3 {
-		t.Fatalf("expected 3 deleted resources, got %d (%v)", len(deleted), deleted)
+	if len(deleted) != 4 {
+		t.Fatalf("expected 4 deleted resources, got %d (%v)", len(deleted), deleted)
+	}
+}
+
+func TestDeployGateway_UpgradesWhenInferencePoolExtensionMissing(t *testing.T) {
+	var egUpgradeStdin string
+	deployer := &DefaultKubeDeployer{
+		CommandRunner: func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+			cmdStr := name + " " + strings.Join(args, " ")
+			switch {
+			case strings.Contains(cmdStr, "wait --for=condition=Available"):
+				return []byte("condition met"), nil
+			case strings.Contains(cmdStr, "get configmap envoy-gateway-config"):
+				return []byte("enableBackend: true"), nil
+			case strings.Contains(cmdStr, "helm upgrade -i eg "):
+				egUpgradeStdin = string(stdin)
+				return []byte("upgraded"), nil
+			default:
+				return []byte("ok"), nil
+			}
+		},
+		EnvoyGatewayVersion: "1.9.3",
+		AIGatewayVersion:    "1.2.0",
+	}
+
+	if err := deployer.DeployGateway(context.Background(), false); err != nil {
+		t.Fatalf("DeployGateway failed: %v", err)
+	}
+	if !strings.Contains(egUpgradeStdin, "extensionManager:") || !strings.Contains(egUpgradeStdin, "InferencePool") {
+		t.Fatalf("expected eg helm upgrade stdin with extensionManager + InferencePool, got:\n%s", egUpgradeStdin)
 	}
 }
 
@@ -396,7 +427,7 @@ func TestDeployGateway_RepairsMissingAIGatewayCRDs(t *testing.T) {
 			case strings.Contains(cmdStr, "wait --for=condition=Available"):
 				return []byte("condition met"), nil
 			case strings.Contains(cmdStr, "get configmap envoy-gateway-config"):
-				return []byte("enableBackend: true"), nil
+				return []byte("enableBackend: true\nInferencePool\nai-gateway-controller"), nil
 			case strings.Contains(cmdStr, "wait --for=condition=Established") && strings.Contains(cmdStr, "--timeout=1s"):
 				return []byte("not found"), context.DeadlineExceeded
 			case strings.Contains(cmdStr, "get crd ") && strings.Contains(cmdStr, "deletionTimestamp"):

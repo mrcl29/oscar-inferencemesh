@@ -1076,6 +1076,47 @@ func (m *MeshInspector) resolveBackendTargets(ctx context.Context, namespace str
 			}
 		}
 	}
+
+	if out, err := m.RunCommand(ctx, "kubectl", "get", "inferencepools", "-n", namespace, "-o", "json"); err == nil {
+		var poolList struct {
+			Items []struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+				Spec struct {
+					TargetPorts []struct {
+						Number int `json:"number"`
+					} `json:"targetPorts"`
+					EndpointPickerRef *struct {
+						Name string `json:"name"`
+						Port *struct {
+							Number int `json:"number"`
+						} `json:"port"`
+					} `json:"endpointPickerRef"`
+				} `json:"spec"`
+			} `json:"items"`
+		}
+		if json.Unmarshal(out, &poolList) == nil {
+			for _, pool := range poolList.Items {
+				if pool.Metadata.Name == "" {
+					continue
+				}
+				port := 8000
+				if len(pool.Spec.TargetPorts) > 0 && pool.Spec.TargetPorts[0].Number > 0 {
+					port = pool.Spec.TargetPorts[0].Number
+				}
+				eppTarget := "epp"
+				if pool.Spec.EndpointPickerRef != nil && pool.Spec.EndpointPickerRef.Name != "" {
+					eppPort := 9002
+					if pool.Spec.EndpointPickerRef.Port != nil && pool.Spec.EndpointPickerRef.Port.Number > 0 {
+						eppPort = pool.Spec.EndpointPickerRef.Port.Number
+					}
+					eppTarget = fmt.Sprintf("%s:%d", pool.Spec.EndpointPickerRef.Name, eppPort)
+				}
+				aiTargets[pool.Metadata.Name] = fmt.Sprintf("InferencePool/%s (port=%d, epp=%s)", pool.Metadata.Name, port, eppTarget)
+			}
+		}
+	}
 	return aiTargets
 }
 
@@ -1226,21 +1267,43 @@ func buildDiagnosticFindings(opts StatusOptions, report *MeshStatusReport) []Dia
 		})
 	}
 
-	// EnvoyExtensionPolicy checks
+	// EnvoyExtensionPolicy checks (optional/legacy when InferencePool routes manage endpointPickerRef natively)
+	hasInferencePool := false
+	for _, cm := range report.ConnectedModels {
+		if strings.HasPrefix(cm.BackendTarget, "InferencePool/") {
+			hasInferencePool = true
+			break
+		}
+	}
 	ep := report.Gateway.ExtensionPolicy
 	if !ep.Exists {
-		findings = append(findings, DiagnosticFinding{
-			Severity:  SeverityFail,
-			Component: "ExtensionPolicy",
-			Message:   fmt.Sprintf("EnvoyExtensionPolicy '%s' not found in namespace '%s'.", opts.ExtensionPolicyName, opts.Namespace),
-			Hint:      "Run 'oscar-im init --docker' to apply EnvoyExtensionPolicy.",
-		})
+		if hasInferencePool || len(report.ConnectedModels) == 0 {
+			findings = append(findings, DiagnosticFinding{
+				Severity:  SeverityOK,
+				Component: "ExtensionPolicy",
+				Message:   fmt.Sprintf("No gateway-wide EnvoyExtensionPolicy '%s'; InferencePool endpointPickerRef binds EPP natively per model route.", opts.ExtensionPolicyName),
+			})
+		} else {
+			findings = append(findings, DiagnosticFinding{
+				Severity:  SeverityFail,
+				Component: "ExtensionPolicy",
+				Message:   fmt.Sprintf("EnvoyExtensionPolicy '%s' not found in namespace '%s'.", opts.ExtensionPolicyName, opts.Namespace),
+				Hint:      "Connect the model via InferencePool ('oscar-im model add') or apply EnvoyExtensionPolicy.",
+			})
+		}
 	} else if !ep.TargetExists {
 		findings = append(findings, DiagnosticFinding{
 			Severity:  SeverityFail,
 			Component: "ExtensionPolicy",
 			Message:   fmt.Sprintf("EnvoyExtensionPolicy '%s' targets %s '%s', which does not exist.", ep.Name, emptyFallback(ep.TargetKind, "Gateway"), ep.TargetName),
 			Hint:      "Create the target Gateway resource before Envoy ext_proc traffic can invoke EPP.",
+		})
+	} else if hasInferencePool {
+		findings = append(findings, DiagnosticFinding{
+			Severity:  SeverityWarn,
+			Component: "ExtensionPolicy",
+			Message:   fmt.Sprintf("EnvoyExtensionPolicy '%s' is present alongside InferencePool routes and may cause duplicate/plaintext ext_proc calls.", ep.Name),
+			Hint:      fmt.Sprintf("Remove it with 'kubectl delete envoyextensionpolicy %s -n %s'.", ep.Name, opts.Namespace),
 		})
 	} else if ep.Accepted != "True" {
 		findings = append(findings, DiagnosticFinding{

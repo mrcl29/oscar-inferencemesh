@@ -45,6 +45,9 @@ func TestEmbeddedManifestsExist(t *testing.T) {
 	if !strings.Contains(string(routeData), "kind: AIGatewayRoute") {
 		t.Fatalf("expected AIGatewayRoute manifest to contain 'kind: AIGatewayRoute'")
 	}
+	if !strings.Contains(string(routeData), "kind: InferencePool") {
+		t.Fatalf("expected AIGatewayRoute manifest to contain 'kind: InferencePool'")
+	}
 }
 
 func TestRenderManifest(t *testing.T) {

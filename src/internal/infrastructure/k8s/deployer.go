@@ -54,6 +54,8 @@ type ModelRouteOptions struct {
 	GatewayNamespace  string
 	TargetBackendHost string
 	TargetBackendPort int
+	EPPServiceName    string
+	EPPGRPCPort       int
 	DiskManifestPath  string
 	Force             bool
 }
@@ -102,6 +104,44 @@ var requiredAIGatewayCRDs = []string{
 	"aiservicebackends.aigateway.envoyproxy.io",
 }
 
+const envoyGatewayHelmValues = `config:
+  envoyGateway:
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    logging:
+      level:
+        default: info
+    provider:
+      type: Kubernetes
+    extensionApis:
+      enableBackend: true
+      enableEnvoyPatchPolicy: true
+    extensionManager:
+      backendResources:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          version: v1
+      hooks:
+        xdsTranslator:
+          translation:
+            listener:
+              includeAll: true
+            route:
+              includeAll: true
+            cluster:
+              includeAll: true
+            secret:
+              includeAll: true
+          post:
+            - Translation
+            - Cluster
+            - Route
+      service:
+        fqdn:
+          hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+          port: 1063
+`
+
 // DeployGateway provisions Envoy Gateway and Envoy AI Gateway via Helm charts with idempotency.
 func (d *DefaultKubeDeployer) DeployGateway(ctx context.Context, force bool) error {
 	// Verify helm exists
@@ -109,26 +149,26 @@ func (d *DefaultKubeDeployer) DeployGateway(ctx context.Context, force bool) err
 		return fmt.Errorf("helm not found in PATH: please install helm first")
 	}
 
-	// Idempotency check: are both deployments Available, Backend API enabled, and AI Gateway CRDs established?
+	// Idempotency check: are both deployments Available, Backend + InferencePool extensionManager enabled, and AI Gateway CRDs established?
 	if !force {
 		egReady := d.isDeploymentAvailable(ctx, "envoy-gateway-system", "envoy-gateway")
 		aiegReady := d.isDeploymentAvailable(ctx, "envoy-ai-gateway-system", "ai-gateway-controller")
 		backendEnabled := d.isBackendAPIEnabled(ctx)
+		inferencePoolEnabled := d.isInferencePoolExtensionEnabled(ctx)
 		crdsReady := d.areAIGatewayCRDsEstablished(ctx)
 
-		if egReady && aiegReady && backendEnabled && crdsReady {
+		if egReady && aiegReady && backendEnabled && inferencePoolEnabled && crdsReady {
 			return nil
 		}
 	}
 
-	// 1. Deploy Envoy Gateway
-	out, err := d.CommandRunner(ctx, nil, "helm", "upgrade", "-i", "eg", "oci://docker.io/envoyproxy/gateway-helm",
+	// 1. Deploy Envoy Gateway (with Backend API + AI Gateway extensionManager + InferencePool v1)
+	out, err := d.CommandRunner(ctx, []byte(envoyGatewayHelmValues), "helm", "upgrade", "-i", "eg", "oci://docker.io/envoyproxy/gateway-helm",
 		"--version", d.EnvoyGatewayVersion,
 		"--namespace", "envoy-gateway-system",
 		"--create-namespace",
 		"--force-conflicts",
-		"--set", "config.envoyGateway.extensionApis.enableBackend=true",
-		"--set", "config.envoyGateway.extensionApis.enableEnvoyPatchPolicy=true")
+		"-f", "-")
 	if err != nil {
 		return fmt.Errorf("failed to deploy Envoy Gateway helm release: %w (%s)", err, string(out))
 	}
@@ -267,6 +307,9 @@ func (d *DefaultKubeDeployer) ConnectModelRoute(ctx context.Context, opts ModelR
 		"MODEL_NAME":              norm.ModelName,
 		"GATEWAY_NAME":            norm.GatewayName,
 		"GATEWAY_NAMESPACE":       norm.GatewayNamespace,
+		"INFERENCE_POOL_NAME":     norm.ModelName + "-pool",
+		"EPP_SERVICE_NAME":        norm.EPPServiceName,
+		"EPP_GRPC_PORT":           strconv.Itoa(norm.EPPGRPCPort),
 		"BACKEND_NAME":            norm.ModelName + "-eg-backend",
 		"AI_SERVICE_BACKEND_NAME": norm.ModelName + "-backend",
 		"ROUTE_NAME":              norm.ModelName + "-ai-route",
@@ -285,7 +328,7 @@ func (d *DefaultKubeDeployer) ConnectModelRoute(ctx context.Context, opts ModelR
 	return nil
 }
 
-// DisconnectModelRoute removes Backend, AIServiceBackend, and AIGatewayRoute for a model.
+// DisconnectModelRoute removes AIGatewayRoute, InferencePool, and any legacy Backend/AIServiceBackend for a model.
 func (d *DefaultKubeDeployer) DisconnectModelRoute(ctx context.Context, opts ModelRouteOptions) error {
 	norm := normalizeModelRouteOpts(opts)
 	if norm.ModelName == "" {
@@ -297,6 +340,7 @@ func (d *DefaultKubeDeployer) DisconnectModelRoute(ctx context.Context, opts Mod
 		name string
 	}{
 		{"aigatewayroute", norm.ModelName + "-ai-route"},
+		{"inferencepool", norm.ModelName + "-pool"},
 		{"aiservicebackend", norm.ModelName + "-backend"},
 		{"backend", norm.ModelName + "-eg-backend"},
 	}
@@ -344,6 +388,12 @@ func normalizeModelRouteOpts(opts ModelRouteOptions) ModelRouteOptions {
 	}
 	if opts.TargetBackendPort <= 0 {
 		opts.TargetBackendPort = 8000
+	}
+	if opts.EPPServiceName == "" {
+		opts.EPPServiceName = "oscar-inferencemesh-epp"
+	}
+	if opts.EPPGRPCPort <= 0 {
+		opts.EPPGRPCPort = 9002
 	}
 	return opts
 }
@@ -540,6 +590,13 @@ func (d *DefaultKubeDeployer) isBackendAPIEnabled(ctx context.Context) bool {
 	out, err := d.CommandRunner(ctx, nil, "kubectl", "-n", "envoy-gateway-system", "get", "configmap",
 		"envoy-gateway-config", "-o", "jsonpath={.data.envoy-gateway\\.yaml}")
 	return err == nil && strings.Contains(string(out), "enableBackend: true")
+}
+
+func (d *DefaultKubeDeployer) isInferencePoolExtensionEnabled(ctx context.Context) bool {
+	out, err := d.CommandRunner(ctx, nil, "kubectl", "-n", "envoy-gateway-system", "get", "configmap",
+		"envoy-gateway-config", "-o", "jsonpath={.data.envoy-gateway\\.yaml}")
+	cfg := string(out)
+	return err == nil && strings.Contains(cfg, "InferencePool") && strings.Contains(cfg, "ai-gateway-controller")
 }
 
 func (d *DefaultKubeDeployer) areAIGatewayCRDsEstablished(ctx context.Context) bool {

@@ -520,68 +520,25 @@ func handleInit(args []string, isRestart bool) {
 			logInfo("EPP is successfully deployed and running in namespace '" + opts.namespace + "'.")
 		}
 
-		// 5. Attach EnvoyExtensionPolicy (ext_proc gRPC filter)
-		logStep("5. Attaching EnvoyExtensionPolicy (ext_proc gRPC)")
-		extPolicyScript := filepath.Join(repoRoot, "scripts", "production", "deploy-extension-policy.sh")
-		if fileExists(extPolicyScript) {
-			policyEnv := map[string]string{
-				"NAMESPACE": opts.namespace,
-				"FORCE":     strconv.FormatBool(opts.force),
-			}
-			if err := runScriptWithEnv(extPolicyScript, policyEnv); err != nil {
-				logErr(fmt.Sprintf("Failed to configure EnvoyExtensionPolicy: %v", err))
-				os.Exit(1)
-			}
-		} else {
-			logInfo("Running in standalone binary mode (using embedded EnvoyExtensionPolicy manifest)...")
-			policyOpts := k8s.ExtensionPolicyOptions{
-				Namespace:           opts.namespace,
-				GatewayName:         "envoy-ai-gateway",
-				EPPServiceName:      "oscar-inferencemesh-epp",
-				EPPGRPCPort:         opts.grpcPort,
-				ExtensionPolicyName: "envoy-ai-gateway-epp-ext-proc",
-				Force:               opts.force,
-			}
-			if err := deployer.DeployExtensionPolicy(deployCtx, policyOpts); err != nil {
-				logErr(fmt.Sprintf("Failed to configure EnvoyExtensionPolicy: %v", err))
-				os.Exit(1)
-			}
-			logInfo("EnvoyExtensionPolicy successfully configured.")
-		}
+		// 5. Remove legacy gateway-wide EnvoyExtensionPolicy if present; InferencePool routes attach endpointPickerRef natively.
+		logStep("5. Verifying ext_proc Attachment Strategy (InferencePool Native)")
+		_ = deployer.RemoveExtensionPolicy(deployCtx, k8s.ExtensionPolicyOptions{
+			Namespace:           opts.namespace,
+			ExtensionPolicyName: "envoy-ai-gateway-epp-ext-proc",
+		})
+		logInfo("EndpointPicker gRPC will be bound per model via InferencePool endpointPickerRef (TLS on port " + strconv.Itoa(opts.grpcPort) + ").")
 	} else {
 		logStep("4. Configuring Host Execution Mode for EPP")
 		logInfo("The EPP runs directly on the host machine.")
 		logInfo(fmt.Sprintf("Listen Addresses: gRPC ext_proc on :%d, HTTP verification on :%d", opts.grpcPort, opts.httpPort))
 		logInfo("To launch the EPP process on the host machine, run:")
 		fmt.Printf("\n   go -C src run ./cmd/epp --port %d\n\n", opts.httpPort)
-
-		// Also configure EnvoyExtensionPolicy so the Gateway is ready for the EPP
-		logStep("5. Ensuring EnvoyExtensionPolicy CRD is applied")
-		extPolicyScript := filepath.Join(repoRoot, "scripts", "production", "deploy-extension-policy.sh")
-		if fileExists(extPolicyScript) {
-			env := map[string]string{
-				"NAMESPACE":  opts.namespace,
-				"MODEL_NAME": opts.modelName,
-				"FORCE":      strconv.FormatBool(opts.force),
-			}
-			_ = runScriptWithEnv(extPolicyScript, env)
-		} else {
-			policyOpts := k8s.ExtensionPolicyOptions{
-				Namespace:           opts.namespace,
-				GatewayName:         "envoy-ai-gateway",
-				EPPServiceName:      "oscar-inferencemesh-epp",
-				EPPGRPCPort:         opts.grpcPort,
-				ExtensionPolicyName: "envoy-ai-gateway-epp-ext-proc",
-				Force:               opts.force,
-			}
-			_ = deployer.DeployExtensionPolicy(deployCtx, policyOpts)
-		}
 	}
 
 	logStep("Initialization Completed Successfully")
 	fmt.Println("Summary:")
 	fmt.Printf("  ✓ Envoy AI Gateway (%s/%s:%d) is ready\n", opts.namespace, opts.gatewayName, opts.gatewayPort)
-	fmt.Printf("  ✓ EnvoyExtensionPolicy ext_proc on port %d is active\n", opts.grpcPort)
+	fmt.Printf("  ✓ InferencePool EndpointPicker gRPC TLS on port %d is ready\n", opts.grpcPort)
 	if opts.docker {
 		fmt.Printf("  ✓ EPP is deployed as a Kubernetes Service in namespace '%s'\n", opts.namespace)
 	} else {
@@ -723,7 +680,7 @@ func handleRemove(args []string, isRestart bool) {
 	if !opts.keepGateway {
 		logStep("4. Removing model routes, Gateway data plane & Envoy controllers")
 		_ = exec.CommandContext(cleanupCtx, "kubectl", "delete",
-			"aigatewayroute,aiservicebackend,backend", "-n", opts.namespace,
+			"aigatewayroute,inferencepool,aiservicebackend,backend", "-n", opts.namespace,
 			"-l", "app.kubernetes.io/part-of=oscar-inferencemesh", "--ignore-not-found=true").Run()
 		if err := deployer.RemoveGatewayDataPlane(cleanupCtx, k8s.GatewayDataPlaneOptions{
 			GatewayName:      opts.gatewayName,
@@ -972,6 +929,11 @@ func handleModelConnect(args []string) {
 		logErr(err.Error())
 		os.Exit(1)
 	}
+	// Remove legacy gateway-wide EnvoyExtensionPolicy if present so InferencePool endpointPickerRef owns ext_proc cleanly without duplicate plaintext calls.
+	_ = deployer.RemoveExtensionPolicy(ctx, k8s.ExtensionPolicyOptions{
+		Namespace:           opts.Namespace,
+		ExtensionPolicyName: "envoy-ai-gateway-epp-ext-proc",
+	})
 
 	logInfo(fmt.Sprintf("Model '%s' connected to Envoy Gateway.", opts.ModelName))
 	fmt.Printf("  Test with:\n    curl -i -X POST http://localhost:8080/v1/chat/completions -H 'Content-Type: application/json' -H 'x-ai-eg-model: %s' -d '{\"model\":\"%s\",\"messages\":[{\"role\":\"user\",\"content\":\"Hola\"}],\"max_tokens\":30}'\n\n", opts.ModelName, opts.ModelName)

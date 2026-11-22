@@ -1,34 +1,26 @@
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: Backend
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
 metadata:
-  name: ${BACKEND_NAME}
+  name: ${INFERENCE_POOL_NAME}
   namespace: ${NAMESPACE}
   labels:
-    app.kubernetes.io/name: ${BACKEND_NAME}
+    app.kubernetes.io/name: ${INFERENCE_POOL_NAME}
     app.kubernetes.io/part-of: oscar-inferencemesh
     oscar-inferencemesh.io/model: ${MODEL_NAME}
 spec:
-  endpoints:
-    - fqdn:
-        hostname: ${TARGET_BACKEND_HOST}
-        port: ${TARGET_BACKEND_PORT}
----
-apiVersion: aigateway.envoyproxy.io/v1beta1
-kind: AIServiceBackend
-metadata:
-  name: ${AI_SERVICE_BACKEND_NAME}
-  namespace: ${NAMESPACE}
-  labels:
-    app.kubernetes.io/name: ${AI_SERVICE_BACKEND_NAME}
-    app.kubernetes.io/part-of: oscar-inferencemesh
-    oscar-inferencemesh.io/model: ${MODEL_NAME}
-spec:
-  schema:
-    name: OpenAI
-  backendRef:
-    group: gateway.envoyproxy.io
-    kind: Backend
-    name: ${BACKEND_NAME}
+  targetPorts:
+    - number: ${TARGET_BACKEND_PORT}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ${MODEL_NAME}
+      kserve.io/component: workload
+  endpointPickerRef:
+    group: ""
+    kind: Service
+    name: ${EPP_SERVICE_NAME}
+    port:
+      number: ${EPP_GRPC_PORT}
+    failureMode: FailOpen
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: AIGatewayRoute
@@ -52,5 +44,7 @@ spec:
             - name: x-ai-eg-model
               value: ${MODEL_NAME}
       backendRefs:
-        - name: ${AI_SERVICE_BACKEND_NAME}
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: ${INFERENCE_POOL_NAME}
           weight: 1
